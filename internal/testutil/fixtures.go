@@ -29,10 +29,13 @@ const (
 	PrivateName    = "dev-ops"
 	DMID           = "fakedm00000000000000000000"
 	DMName         = MeID + "__" + OwnerID // model.GetDMNameFromIds(MeID, OwnerID)
+
+	Version = "10.0.0.123.abc.false" // X-Version-Id: <X.Y.Z>.<build>.<hash>.<licensed>
 )
 
 func (s *Server) seed() {
-	s.Me = &model.User{Id: MeID, Username: MeUsername, Locale: "en"}
+	s.Version = Version
+	s.Me = &model.User{Id: MeID, Username: MeUsername, Locale: "en", Roles: model.SystemUserRoleId}
 	s.Users = []*model.User{
 		s.Me,
 		{Id: OwnerID, Username: OwnerName, FirstName: "Ivan", Locale: "en"},

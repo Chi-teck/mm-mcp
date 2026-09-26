@@ -12,7 +12,12 @@ import (
 // errorText renders err as one line: its whole text,
 // wrapping context included, with runs of whitespace collapsed.
 func errorText(err error) string {
-	return strings.Join(strings.Fields(err.Error()), " ")
+	return oneLine(err.Error())
+}
+
+// oneLine trims s and collapses its runs of whitespace, newlines included, to single spaces.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // errorResult turns err into a tool result with isError set; it is

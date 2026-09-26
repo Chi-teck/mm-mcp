@@ -84,6 +84,35 @@ func TestInit(t *testing.T) {
 	if n := len(fake.Requests()); n != 2 {
 		t.Fatalf("requests = %d, want 2", n)
 	}
+	if v := c.ServerVersion(); v != "10.0.0" {
+		t.Fatalf("ServerVersion = %q, want 10.0.0", v)
+	}
+}
+
+// TestInitServerVersionPlain: a bare `X.Y.Z` X-Version-Id is kept whole.
+func TestInitServerVersionPlain(t *testing.T) {
+	c, fake := newTestContext(t)
+	fake.Version = "10.5.0"
+	if err := c.Init(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if v := c.ServerVersion(); v != "10.5.0" {
+		t.Fatalf("ServerVersion = %q, want 10.5.0", v)
+	}
+}
+
+// TestInitServerVersionUnknown: an absent, short or non-numeric X-Version-Id leaves the version empty.
+func TestInitServerVersionUnknown(t *testing.T) {
+	for _, header := range []string{"", "10.0", "...", "10.0.", "a.b.c.d"} {
+		c, fake := newTestContext(t)
+		fake.Version = header
+		if err := c.Init(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if v := c.ServerVersion(); v != "" {
+			t.Errorf("header %q: ServerVersion = %q, want empty", header, v)
+		}
+	}
 }
 
 func TestInitBadTeam(t *testing.T) {

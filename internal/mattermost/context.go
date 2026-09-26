@@ -32,8 +32,9 @@ type Context struct {
 	client *model.Client4
 	now    func() time.Time // injectable for cache TTL tests
 
-	me   *model.User // set once by Init
-	team *model.Team // set once by Init
+	me            *model.User // set once by Init
+	team          *model.Team // set once by Init
+	serverVersion string      // set once by Init; "" when unknown
 
 	mu       sync.Mutex
 	channels map[string]cached[*model.Channel] // keys "id:<id>" and "name:<team id>:<name>" ("" team for DM/GM)
@@ -81,7 +82,7 @@ func (c *Context) Init(ctx context.Context) error {
 	if err := CheckName("team", c.cfg.Team); err != nil {
 		return err
 	}
-	me, _, err := c.client.GetMe(ctx, "")
+	me, resp, err := c.client.GetMe(ctx, "")
 	if err != nil {
 		return WrapErr("/api/v4/users/me", err)
 	}
@@ -96,7 +97,26 @@ func (c *Context) Init(ctx context.Context) error {
 		return errEmptyResponse
 	}
 	c.me, c.team = me, team
+	if resp != nil {
+		c.serverVersion = trimVersion(resp.ServerVersion)
+	}
 	return nil
+}
+
+// trimVersion keeps the `X.Y.Z` version from an X-Version-Id header
+// (`<X.Y.Z>.<build>.<hash>.<licensed>`), or returns "" when the header does
+// not start with three numbers.
+func trimVersion(id string) string {
+	parts := strings.SplitN(id, ".", 4)
+	if len(parts) < 3 {
+		return ""
+	}
+	for _, p := range parts[:3] {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return ""
+		}
+	}
+	return strings.Join(parts[:3], ".")
 }
 
 // Me returns the current user loaded by Init.
@@ -104,6 +124,10 @@ func (c *Context) Me() *model.User { return c.me }
 
 // Team returns the configured team loaded by Init.
 func (c *Context) Team() *model.Team { return c.team }
+
+// ServerVersion returns the Mattermost version (`X.Y.Z`) seen by Init, or ""
+// when the server did not report a recognizable one.
+func (c *Context) ServerVersion() string { return c.serverVersion }
 
 // fetchTeam looks up the configured team by id when the configured value has
 // id shape and by name otherwise. An HTTP 404 yields

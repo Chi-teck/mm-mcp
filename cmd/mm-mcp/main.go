@@ -82,8 +82,9 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 		_, _ = fmt.Fprintln(stderr, "mm-mcp: attachments disabled: set "+config.EnvUploadRoot+" to enable them")
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "mm-mcp", Version: buildVersion()}, nil)
-	tools.Register(server, mm)
+	ver := buildVersion()
+	server := mcp.NewServer(&mcp.Implementation{Name: "mm-mcp", Version: ver}, nil)
+	tools.Register(server, mm, ver)
 	transport := &mcp.IOTransport{Reader: io.NopCloser(stdin), Writer: nopWriteCloser{stdout}}
 	if err := server.Run(ctx, transport); err != nil && !isShutdown(ctx, err) {
 		return fail(err)

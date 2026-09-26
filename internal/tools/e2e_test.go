@@ -16,25 +16,26 @@ import (
 	"github.com/Chi-teck/mm-mcp/internal/testutil"
 )
 
-// e2eAnnotations is the expected annotation table: readOnly, destructive, idempotent. openWorld is true for
-// every tool. Kept independent of the annotations map so a table typo cannot hide itself.
-var e2eAnnotations = map[string][3]bool{
-	"list_channels":   {true, false, false},
-	"read_posts":      {true, false, false},
-	"get_post":        {true, false, false},
-	"search":          {true, false, false},
-	"list_members":    {true, false, false},
-	"get_file":        {false, false, false},
-	"follow_thread":   {false, false, true},
-	"unfollow_thread": {false, false, true},
-	"create_post":     {false, false, false},
-	"react":           {false, true, true},
-	"edit_post":       {false, true, false},
-	"dm":              {false, false, true},
-	"api":             {false, true, false},
+// e2eAnnotations is the expected annotation table: readOnly, destructive, idempotent, openWorld. Kept
+// independent of the annotations map so a table typo cannot hide itself.
+var e2eAnnotations = map[string][4]bool{
+	"list_channels":   {true, false, false, true},
+	"read_posts":      {true, false, false, true},
+	"get_post":        {true, false, false, true},
+	"search":          {true, false, false, true},
+	"list_members":    {true, false, false, true},
+	"get_file":        {false, false, false, true},
+	"follow_thread":   {false, false, true, true},
+	"unfollow_thread": {false, false, true, true},
+	"create_post":     {false, false, false, true},
+	"react":           {false, true, true, true},
+	"edit_post":       {false, true, false, true},
+	"dm":              {false, false, true, true},
+	"api":             {false, true, false, true},
+	"whoami":          {true, false, false, false},
 }
 
-// TestE2EListTools checks tools/list over the in-memory transport: exactly the 15 tools,
+// TestE2EListTools checks tools/list over the in-memory transport: exactly the 14 tools,
 // their annotations, and a description on every tool and input property.
 func TestE2EListTools(t *testing.T) {
 	h := newHarness(t)
@@ -58,8 +59,8 @@ func TestE2EListTools(t *testing.T) {
 			t.Errorf("%s: no annotations", tool.Name)
 			continue
 		}
-		if a.OpenWorldHint == nil || !*a.OpenWorldHint {
-			t.Errorf("%s: openWorldHint = %v, want true", tool.Name, a.OpenWorldHint)
+		if a.OpenWorldHint == nil || *a.OpenWorldHint != want[3] {
+			t.Errorf("%s: openWorldHint = %v, want %v", tool.Name, a.OpenWorldHint, want[3])
 		}
 		if a.ReadOnlyHint != want[0] {
 			t.Errorf("%s: readOnlyHint = %v, want %v", tool.Name, a.ReadOnlyHint, want[0])
@@ -165,6 +166,10 @@ func TestE2ECallEachTool(t *testing.T) {
 		{"dm", map[string]any{"username": testutil.OwnerName},
 			"DM channel with @ivan.ch: " + testutil.DMName + " (id: " + testutil.DMID + ") — pass it as the channel to create_post"},
 		{"api", map[string]any{"path": "/users/me/status"}, `{"status":"online"}`},
+		{"whoami", nil, "You: @" + testutil.MeUsername + ", user (id: " + testutil.MeID + ")\nSystem roles: system_user\n" +
+			"Locale: en; profile timezone: unset\n" + whoamiTimes() + "\nTeam: " + testutil.TeamName + " — Fake Team (id: " + testutil.TeamID + ")\n" +
+			"Server: " + f.URL + " (Mattermost 10.0.0)\nmm-mcp: test\nDownloads: " + dir + "\n" +
+			"Attachments: disabled (MM_MCP_UPLOAD_ROOT unset)"},
 	}
 	called := map[string]bool{}
 	for _, tc := range cases {

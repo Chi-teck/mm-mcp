@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -28,7 +29,9 @@ import (
 //	text, isErr := h.callTool(t, "get_post", map[string]any{"post_id": id})
 //	text = h.callOK(t, "list_channels", nil) // fails the test on isError
 //
-// Mutate h.fake fixtures or add handlers before the first call that needs them.
+// Mutate h.fake fixtures or add handlers before the first call that needs them. Init has already
+// cached the current user, the team and the server version; change those through a
+// newConfigHarness setup instead.
 type harness struct {
 	fake    *testutil.Server
 	mm      *mattermost.Context
@@ -43,16 +46,20 @@ func newHarness(t *testing.T) *harness {
 	return newConfigHarness(t, config.Config{})
 }
 
-// newConfigHarness is newHarness with the optional settings of cfg; its URL, Token and Team are
-// filled in.
-func newConfigHarness(t *testing.T, cfg config.Config) *harness {
+// newConfigHarness is newHarness with the optional settings of cfg; its URL and Token are
+// filled in, and Team when empty. Each setup runs on the fake before Context.Init, e.g. to edit
+// fields of fake.Me in place (fake.Users[0] is the same user, so don't replace the pointer).
+func newConfigHarness(t *testing.T, cfg config.Config, setup ...func(*testutil.Server)) *harness {
 	t.Helper()
 	fake := testutil.New(t)
-	cfg.URL, cfg.Token, cfg.Team = fake.URL, testutil.Token, testutil.TeamName
+	for _, f := range setup {
+		f(fake)
+	}
+	cfg.URL, cfg.Token, cfg.Team = fake.URL, testutil.Token, cmp.Or(cfg.Team, testutil.TeamName)
 	mm := mattermost.NewContext(cfg)
 	initContext(t, mm, fake)
 	server := mcp.NewServer(&mcp.Implementation{Name: "mm-mcp-test", Version: "test"}, nil)
-	Register(server, mm)
+	Register(server, mm, "test")
 
 	ctx := context.Background()
 	serverT, clientT := mcp.NewInMemoryTransports()

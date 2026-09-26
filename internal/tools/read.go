@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"github.com/Chi-teck/mm-mcp/internal/config"
 	"github.com/Chi-teck/mm-mcp/internal/mattermost"
 )
 
@@ -37,6 +39,8 @@ const (
 
 type listChannelsIn struct{}
 
+type whoamiIn struct{}
+
 type readPostsIn struct {
 	Channel      string `json:"channel" jsonschema:"Channel name or 26-char id"`
 	ThreadRootID string `json:"thread_root_id,omitempty" jsonschema:"Read this thread: its root post plus the newest replies (up to limit)"`
@@ -52,8 +56,8 @@ type getPostIn struct {
 	Full   bool   `json:"full,omitempty" jsonschema:"Print the message body in full instead of cutting it at 500 chars"`
 }
 
-// registerRead adds list_channels, read_posts, get_post, search and list_members.
-func registerRead(s *mcp.Server, c *mattermost.Context) {
+// registerRead adds list_channels, read_posts, get_post, search, list_members and whoami.
+func registerRead(s *mcp.Server, c *mattermost.Context, version string) {
 	addTool(s, "list_channels",
 		"List the Mattermost channels this user is a member of in the team, as `name — display_name [type]` "+
 			"(a DM shows `DM with @user` as its display name).",
@@ -76,6 +80,50 @@ func registerRead(s *mcp.Server, c *mattermost.Context) {
 	addTool(s, "list_members",
 		"List members of a Mattermost channel; with query, fuzzy-match usernames (out-of-channel matches are marked).",
 		func(ctx context.Context, in listMembersIn) (string, error) { return listMembers(ctx, c, in) })
+	addTool(s, "whoami",
+		"Describe this session as of mm-mcp startup: your Mattermost account (username, id, bot or not, "+
+			"system roles, locale, profile timezone), the team that channel names refer to, the server URL and "+
+			"version, the zone mm-mcp reads offset-less times in, and mm-mcp's download directory and upload root. "+
+			"Instant; no side effects.",
+		func(context.Context, whoamiIn) (string, error) { return whoami(c, version), nil })
+}
+
+// whoami describes the session from the data loaded at startup; it sends no request.
+func whoami(c *mattermost.Context, version string) string {
+	me, team := c.Me(), c.Team()
+	name := oneLine(me.FirstName + " " + me.LastName)
+	if nick := oneLine(me.Nickname); nick != "" {
+		name = strings.TrimSpace(name + " (" + nick + ")")
+	}
+	if name != "" {
+		name = " — " + name
+	}
+	kind := "user"
+	if me.IsBot {
+		kind = "bot"
+	}
+	serverVersion := cmp.Or(c.ServerVersion(), "unknown")
+	downloads := cmp.Or(c.DownloadDir(), "disabled ("+config.EnvDownloadDir+" unset)")
+	attachments := cmp.Or(c.UploadRoot(), "disabled ("+config.EnvUploadRoot+" unset)")
+	lines := []string{
+		fmt.Sprintf("You: @%s%s, %s (id: %s)", me.Username, name, kind, me.Id),
+		"System roles: " + oneLine(me.Roles),
+		fmt.Sprintf("Locale: %s; profile timezone: %s", cmp.Or(oneLine(me.Locale), "unset"),
+			cmp.Or(oneLine(me.GetPreferredTimezone()), "unset")),
+		"Times: offset-less datetimes in since and schedule_at are read in mm-mcp's zone, " + localZone(time.Now()) +
+			"; bare dates are UTC midnight",
+		fmt.Sprintf("Team: %s — %s (id: %s)", team.Name, oneLine(team.DisplayName), team.Id),
+		fmt.Sprintf("Server: %s (Mattermost %s)", c.URL(), serverVersion),
+		"mm-mcp: " + version,
+		"Downloads: " + downloads,
+		"Attachments: " + attachments,
+	}
+	return strings.Join(lines, "\n")
+}
+
+// localZone renders the UTC offset of mm-mcp's local zone at now, e.g. "UTC+05:00".
+func localZone(now time.Time) string {
+	return "UTC" + now.Format("-07:00")
 }
 
 func listChannels(ctx context.Context, c *mattermost.Context) (string, error) {

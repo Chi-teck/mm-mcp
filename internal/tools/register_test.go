@@ -16,32 +16,33 @@ import (
 )
 
 func TestAnnotationTable(t *testing.T) {
-	// In table order: name, readOnly, destructive, idempotent.
+	// In table order: name, readOnly, destructive, idempotent, openWorld.
 	want := []struct {
-		name                              string
-		readOnly, destructive, idempotent bool
+		name                                         string
+		readOnly, destructive, idempotent, openWorld bool
 	}{
-		{"list_channels", true, false, false},
-		{"read_posts", true, false, false},
-		{"get_post", true, false, false},
-		{"search", true, false, false},
-		{"list_members", true, false, false},
-		{"get_file", false, false, false},
-		{"follow_thread", false, false, true},
-		{"unfollow_thread", false, false, true},
-		{"create_post", false, false, false},
-		{"react", false, true, true},
-		{"edit_post", false, true, false},
-		{"dm", false, false, true},
-		{"api", false, true, false},
+		{"list_channels", true, false, false, true},
+		{"read_posts", true, false, false, true},
+		{"get_post", true, false, false, true},
+		{"search", true, false, false, true},
+		{"list_members", true, false, false, true},
+		{"get_file", false, false, false, true},
+		{"follow_thread", false, false, true, true},
+		{"unfollow_thread", false, false, true, true},
+		{"create_post", false, false, false, true},
+		{"react", false, true, true, true},
+		{"edit_post", false, true, false, true},
+		{"dm", false, false, true, true},
+		{"api", false, true, false, true},
+		{"whoami", true, false, false, false},
 	}
 	if len(annotations) != len(want) {
 		t.Errorf("annotation table has %d tools, want %d", len(annotations), len(want))
 	}
 	for _, w := range want {
 		a := toolAnnotations(w.name)
-		if a.OpenWorldHint == nil || !*a.OpenWorldHint {
-			t.Errorf("%s: openWorldHint not true", w.name)
+		if a.OpenWorldHint == nil || *a.OpenWorldHint != w.openWorld {
+			t.Errorf("%s: openWorldHint = %v, want %v", w.name, a.OpenWorldHint, w.openWorld)
 		}
 		if a.ReadOnlyHint != w.readOnly {
 			t.Errorf("%s: readOnlyHint = %v, want %v", w.name, a.ReadOnlyHint, w.readOnly)

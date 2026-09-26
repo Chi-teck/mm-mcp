@@ -15,9 +15,10 @@ import (
 )
 
 // hints are the MCP annotations of one tool. destructive and idempotent
-// are only meaningful when readOnly is false.
+// are only meaningful when readOnly is false. closedWorld is set only for a
+// tool that talks to nothing outside mm-mcp, so the zero value is open-world.
 type hints struct {
-	readOnly, destructive, idempotent bool
+	readOnly, destructive, idempotent, closedWorld bool
 }
 
 // annotations is the table of tool annotations. addTool refuses any tool not listed here.
@@ -35,16 +36,17 @@ var annotations = map[string]hints{
 	"edit_post":       {destructive: true},
 	"dm":              {idempotent: true},
 	"api":             {destructive: true},
+	"whoami":          {readOnly: true, closedWorld: true},
 }
 
 // toolAnnotations converts the table entry for name into MCP annotations;
-// openWorldHint is true for every tool.
+// openWorldHint is true unless the entry is closedWorld.
 func toolAnnotations(name string) *mcp.ToolAnnotations {
 	h, ok := annotations[name]
 	if !ok {
 		panic(fmt.Sprintf("tools: %q is not in the annotation table", name))
 	}
-	a := &mcp.ToolAnnotations{ReadOnlyHint: h.readOnly, OpenWorldHint: new(true)}
+	a := &mcp.ToolAnnotations{ReadOnlyHint: h.readOnly, OpenWorldHint: new(!h.closedWorld)}
 	if !h.readOnly {
 		a.DestructiveHint = new(h.destructive)
 		a.IdempotentHint = h.idempotent
@@ -129,9 +131,9 @@ func addTool[In any](s *mcp.Server, name, description string, h handler[In], edi
 }
 
 // Register adds every tool to server. It is the single place where tools
-// are added.
-func Register(server *mcp.Server, c *mattermost.Context) {
-	registerRead(server, c)
+// are added. version is the mm-mcp version reported by whoami.
+func Register(server *mcp.Server, c *mattermost.Context, version string) {
+	registerRead(server, c, version)
 	registerMisc(server, c)
 	registerWrite(server, c)
 	registerFiles(server, c)

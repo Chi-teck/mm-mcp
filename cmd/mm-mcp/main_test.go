@@ -160,7 +160,8 @@ func TestRunServesStdio(t *testing.T) {
 	if _, err := io.WriteString(inW, req); err != nil {
 		t.Fatal(err)
 	}
-	line, err := bufio.NewReader(outR).ReadBytes('\n')
+	out := bufio.NewReader(outR)
+	line, err := out.ReadBytes('\n')
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +176,28 @@ func TestRunServesStdio(t *testing.T) {
 		t.Errorf("stdout = %q, want an initialize response from mm-mcp %s (%v)", line, buildVersion(), err)
 	}
 
+	// whoami reports the same version as serverInfo.
+	call := `{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" +
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}` + "\n"
+	if _, err := io.WriteString(inW, call); err != nil {
+		t.Fatal(err)
+	}
+	if line, err = out.ReadBytes('\n'); err != nil {
+		t.Fatal(err)
+	}
+	var who struct {
+		ID     int `json:"id"`
+		Result struct {
+			Content []struct{ Text string } `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(line, &who); err != nil || who.ID != 2 || len(who.Result.Content) != 1 ||
+		!strings.Contains(who.Result.Content[0].Text, "\nmm-mcp: "+buildVersion()+"\n") {
+		t.Errorf("stdout = %q, want a whoami result with mm-mcp %s (%v)", line, buildVersion(), err)
+	}
+
 	_ = inW.Close() // client disconnects
-	go func() { _, _ = io.Copy(io.Discard, outR) }()
+	go func() { _, _ = io.Copy(io.Discard, out) }()
 	select {
 	case code := <-done:
 		if code != 0 {

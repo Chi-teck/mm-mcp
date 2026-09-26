@@ -36,6 +36,7 @@ type Server struct {
 	Team     *model.Team
 	Users    []*model.User    // includes Me
 	Channels []*model.Channel // each has Me as a member; seeded ones are in Team, tests may add others
+	Version  string           // X-Version-Id header sent on every response; "" sends none
 
 	mu       sync.Mutex
 	entries  []routeEntry
@@ -147,6 +148,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	fn := s.match(r)
 	s.mu.Unlock()
 
+	if s.Version != "" {
+		w.Header().Set(model.HeaderVersionId, s.Version)
+	}
 	if fn == nil {
 		WriteError(w, http.StatusNotFound, "api.context.404.app_error", "Sorry, we could not find the page.")
 		return
