@@ -1,0 +1,49 @@
+# Release build for mm-mcp — https://goreleaser.com
+#
+# Driven by .github/workflows/release.yml on a v* tag. To see what a release
+# would produce without tagging or publishing anything:
+#
+#   goreleaser release --snapshot --clean
+version: 2
+
+project_name: mm-mcp
+
+before:
+  hooks:
+    - 'go mod download'
+
+builds:
+  # Pure Go, so every target below cross-compiles from the Linux runner and the
+  # binaries stay static. -trimpath keeps the build machine's paths out of them.
+  #
+  # No windows: the upload-root confinement (MM_MCP_UPLOAD_ROOT, refusing `/`
+  # and $HOME) is written and tested for POSIX paths only, and the tests do not
+  # build there (syscall.Mkfifo). Shipping it would be taking it on trust.
+  - main: './cmd/mm-mcp'
+    env:
+      - 'CGO_ENABLED=0'
+    goos: ['linux', 'darwin']
+    goarch: ['amd64', 'arm64']
+    flags: ['-trimpath']
+    ldflags: ['-s -w', '-X main.version={{ .Version }}']
+
+archives:
+  - formats: ['tar.gz']
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files: ['README.md']
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: 'github'
+  sort: 'asc'
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  # A tag carrying a pre-release suffix (v1.0.0-rc1) is published as one.
+  prerelease: 'auto'

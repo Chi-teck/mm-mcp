@@ -1,0 +1,77 @@
+# Taskfile for the mm-mcp project — https://taskfile.dev
+# Run `task` (or `task --list`) to see available commands.
+#
+# The pre-commit gate is the checks list in README.md (Development):
+# go vet, go test, golangci-lint.
+version: '3'
+
+vars:
+  BINARY: mm-mcp
+
+tasks:
+  default:
+    desc: 'List available tasks'
+    cmds:
+      - 'task --list'
+    silent: true
+
+  # No sources/generates fingerprint: `go build` is already incremental, and a
+  # fingerprint that ignores build env reports "up to date" when it is not.
+  build:
+    desc: 'Build the binary into ./{{.BINARY}}'
+    cmds:
+      - 'go build -o {{.BINARY}} ./cmd/mm-mcp'
+
+  # Everything a v* tag would publish, built into ./dist and published
+  # nowhere. Needs goreleaser on PATH; CI installs its own.
+  release:snapshot:
+    desc: 'Build the release archives locally without publishing'
+    cmds:
+      - 'goreleaser release --snapshot --clean'
+
+  test:
+    desc: 'Run tests (fake Mattermost server, no network)'
+    cmds:
+      - 'go test ./...'
+
+  lint:
+    desc: 'Run go vet and golangci-lint'
+    cmds:
+      - 'go vet ./...'
+      - 'golangci-lint run'
+
+  # Not part of `check`: it needs a local JetBrains IDE and is slow.
+  ij-inspect:
+    desc: 'Run JetBrains IDE inspections (ij-inspect.yml); extra args after --'
+    cmds:
+      - 'ij-inspect {{.CLI_ARGS}}'
+
+  # gofmt + goimports with the local prefix from .golangci.yml, so the
+  # formatter set is named in one place.
+  fmt:
+    desc: 'Format the code (gofmt, goimports)'
+    cmds:
+      - 'golangci-lint fmt'
+
+  fmt:check:
+    desc: 'Fail if the code is not formatted (prints the diff)'
+    cmds:
+      - 'golangci-lint fmt --diff'
+
+  tidy:
+    desc: 'Tidy go.mod and go.sum'
+    cmds:
+      - 'go mod tidy'
+
+  check:
+    desc: 'Verify formatting, lint, and tests (pre-commit gate)'
+    cmds:
+      - task: 'fmt:check'
+      - task: 'lint'
+      - task: 'test'
+
+  clean:
+    desc: 'Remove build artifacts'
+    cmds:
+      - 'rm -f {{.BINARY}}'
+      - 'rm -rf dist'

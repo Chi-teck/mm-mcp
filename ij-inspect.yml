@@ -1,0 +1,29 @@
+# $schema: https://raw.githubusercontent.com/Chi-teck/ij-inspect/HEAD/ij-inspect.schema.json
+
+ignore:
+  - paths: [local/, .claude/, .rumdl_cache/, .mcp.json]
+    reason: 'untracked notes, credentials, agent config, caches and scratch files, not project code'
+
+  - paths: ['**/*_test.go']
+    inspections: [HttpUrlsUsage]
+    reason: 'tests talk to local httptest servers, which are plain HTTP'
+
+  - paths: [internal/mattermost/errors_test.go]
+    inspections: [GoDirectComparisonOfErrors]
+    reason: 'TestWrapErr checks that a plain error is returned as the same value'
+
+  - paths: [internal/mattermost/format.go]
+    inspections: [GoRedundantConversion]
+    reason: 'string([]rune(s)) is what turns invalid bytes into U+FFFD'
+
+  - paths: [internal/mattermost/upload.go]
+    inspections: [GoResourceLeak]
+    reason: 'the multipart.Writer writes to a bytes.Buffer; Close only adds the trailer'
+
+  - paths: [internal/tools/files.go]
+    inspections: [GoResourceLeak]
+    reason: 'stream closes the file createUnique returns'
+
+  - paths: [internal/tools/write.go]
+    inspections: [GoMaybeNil]
+    reason: 'confine returns a nil root only with no attachments, and openAll then touches none'

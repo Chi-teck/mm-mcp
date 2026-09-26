@@ -1,0 +1,65 @@
+# The pre-commit gate, run on GitHub: formatting, go vet, golangci-lint,
+# go test — plus the documented build. The same checks as `task check`, spelled
+# out here rather than shelled through Task so a failure names the step that
+# failed and no extra tool has to be installed on the runner. Keep the two in
+# step.
+name: CI
+
+on:
+  push:
+    branches: ['main', '*.x']
+  pull_request:
+  # release.yml runs this gate before it publishes anything.
+  workflow_call:
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+# A new push supersedes the run still in flight for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # go.mod is the single source of the toolchain version; setup-go caches
+      # the module and build caches on its own.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Installed once and driven by hand: the formatter set (gofmt, goimports
+      # with the local prefix) lives in .golangci.yml, so `golangci-lint fmt`
+      # is the format check as well as the linter.
+      #
+      # Pinned rather than floating: a lint release adds checks, and CI going
+      # red on a commit that passed locally is the wrong way to learn that.
+      # Bump this together with the locally installed golangci-lint.
+      - name: install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          install-only: true
+
+      # `--diff` prints what would change and exits non-zero if anything would.
+      - name: fmt
+        run: golangci-lint fmt --diff
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        run: golangci-lint run
+
+      # Tests run against a fake Mattermost server; no network, no secrets.
+      - name: go test
+        run: go test ./...
+
+      - name: build
+        run: go build -o mm-mcp ./cmd/mm-mcp
