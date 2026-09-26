@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,8 +28,10 @@ const (
 	noChannels = "No channels found."
 	// maxHits caps the search results.
 	maxHits = 30
+	// searchFetch is the per_page of a search request; a full page means there may be more.
+	searchFetch = 100
 	// searchHint is the truncation hint of a search hit body.
-	searchHint = "read it with read_posts full=true"
+	searchHint = "read it with get_post full=true"
 	// memberPage and maxMembers bound list_members without query. maxMembers is a
 	// multiple of memberPage, so the pages end exactly at the cap.
 	memberPage = 200
@@ -255,7 +258,7 @@ func threadNote(list *model.PostList, rootID string, limit int) string {
 	if limit >= maxLimit {
 		more = "older replies are out of reach"
 	}
-	return fmt.Sprintf("\n(newest %d replies shown%s — %s)", limit, of, more)
+	return fmt.Sprintf("\n(newest %s shown%s — %s)", mattermost.Plural(limit, "reply", "replies"), of, more)
 }
 
 // pinnedNote is the line appended when there are more pinned posts than limit.
@@ -325,13 +328,14 @@ func search(ctx context.Context, c *mattermost.Context, in searchIn) (string, er
 	if in.Type == "files" {
 		return searchFiles(ctx, c, team.Id, in.Query)
 	}
-	list, _, err := c.Client().SearchPosts(ctx, team.Id, in.Query, false)
+	list, _, err := c.Client().SearchPostsWithParams(ctx, team.Id, searchParams(in.Query))
 	if err != nil {
 		return "", mattermost.WrapErr("/api/v4/teams/"+team.Id+"/posts/search", err)
 	}
 	// Newest first, unlike ShownPosts: hits span channels and are ranked by recency.
 	posts := mattermost.LivePosts(list)
 	sort.SliceStable(posts, func(i, j int) bool { return posts[i].CreateAt > posts[j].CreateAt })
+	capNote := hitsNote(len(posts), len(list.Order))
 	if len(posts) > maxHits {
 		posts = posts[:maxHits]
 	}
@@ -352,16 +356,38 @@ func search(ctx context.Context, c *mattermost.Context, in searchIn) (string, er
 	now := time.Now()
 	lines := make([]string, 0, len(posts))
 	for _, p := range posts {
-		who := mattermost.AuthorName(users, p.UserId)
+		who := "**" + mattermost.AuthorName(users, p.UserId) + "**"
+		if p.IsSystemMessage() {
+			who = "[system]"
+		}
 		body := mattermost.Truncate(p.Message, searchHint, mattermost.MaxBodyChars)
-		lines = append(lines, fmt.Sprintf("**%s** (%s) in %s: %s (post %s)",
+		lines = append(lines, fmt.Sprintf("%s (%s) in %s: %s (post %s)",
 			who, mattermost.RelTime(p.CreateAt, now), channels[p.ChannelId], body, p.Id))
 	}
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n") + capNote, nil
+}
+
+// searchParams is an AND search for query with an explicit page size, so the
+// server's default page size can't cap the hits unnoticed.
+func searchParams(query string) *model.SearchParameter {
+	return &model.SearchParameter{Terms: &query, IsOrSearch: model.NewPointer(false), PerPage: model.NewPointer(searchFetch)}
+}
+
+// hitsNote is the trailing note when more than maxHits of total hits exist;
+// fetched is the size of the server page, and a full page means the total is a floor.
+func hitsNote(total, fetched int) string {
+	if total <= maxHits {
+		return ""
+	}
+	n := strconv.Itoa(total)
+	if fetched >= searchFetch {
+		n += "+"
+	}
+	return fmt.Sprintf("\n(%d of %s matches shown — refine the query)", maxHits, n)
 }
 
 func searchFiles(ctx context.Context, c *mattermost.Context, teamID, query string) (string, error) {
-	list, _, err := c.Client().SearchFiles(ctx, teamID, query, false)
+	list, _, err := c.Client().SearchFilesWithParams(ctx, teamID, searchParams(query))
 	if err != nil {
 		return "", mattermost.WrapErr("/api/v4/teams/"+teamID+"/files/search", err)
 	}
@@ -384,7 +410,7 @@ func searchFiles(ctx context.Context, c *mattermost.Context, teamID, query strin
 		lines = append(lines, fmt.Sprintf("[file] %s (%s, %s, id: %s) [%s]",
 			info.Name, info.MimeType, mattermost.HumanSize(info.Size), info.Id, channels[info.ChannelId]))
 	}
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n") + hitsNote(len(list.Order), len(list.Order)), nil
 }
 
 func listMembers(ctx context.Context, c *mattermost.Context, in listMembersIn) (string, error) {
@@ -415,7 +441,7 @@ func listMembers(ctx context.Context, c *mattermost.Context, in listMembersIn) (
 				return "", mattermost.WrapErr("/api/v4/users", err)
 			}
 			if len(more) > 0 {
-				lines = append(lines, fmt.Sprintf("(first %d members — pass query to search)", maxMembers))
+				return strings.Join(lines, "\n") + fmt.Sprintf("\n(first %d members — pass query to search)", maxMembers), nil
 			}
 			break
 		}
@@ -423,7 +449,7 @@ func listMembers(ctx context.Context, c *mattermost.Context, in listMembersIn) (
 	if len(lines) == 0 {
 		return "No members found.", nil
 	}
-	return strings.Join(lines, "\n"), nil
+	return strings.Join(lines, "\n") + "\n(" + mattermost.Plural(len(lines), "member", "members") + ")", nil
 }
 
 // matchMembers is list_members with query: the server's user autocomplete in team + channel,
@@ -444,6 +470,7 @@ func matchMembers(ctx context.Context, c *mattermost.Context, ch *model.Channel,
 		return "", mattermost.WrapErr("/api/v4/users/autocomplete", err)
 	}
 	var lines []string
+	out := 0
 	if match != nil {
 		for _, u := range match.Users {
 			lines = append(lines, memberLine(u))
@@ -451,11 +478,16 @@ func matchMembers(ctx context.Context, c *mattermost.Context, ch *model.Channel,
 		for _, u := range match.OutOfChannel {
 			lines = append(lines, memberLine(u)+notInChannel)
 		}
+		out = len(match.OutOfChannel)
 	}
 	if len(lines) == 0 {
 		return `No users matching "` + query + `".`, nil
 	}
-	return strings.Join(lines, "\n"), nil
+	note := mattermost.Plural(len(lines), "match", "matches")
+	if out > 0 {
+		note += fmt.Sprintf(", %d not in channel", out)
+	}
+	return strings.Join(lines, "\n") + "\n(" + note + ")", nil
 }
 
 // memberLine renders `- <username> — <first last>`, or `- <username>` without a name.

@@ -194,6 +194,40 @@ func TestReactAddFails(t *testing.T) {
 	wantErr(t, text, isErr, "mattermost API 400 "+testutil.APIPrefix+"/reactions: bad emoji")
 }
 
+func TestReactAddUnknownEmoji(t *testing.T) {
+	p := postID("p1")
+	notFound := "mattermost API 404 " + testutil.APIPrefix + "/reactions: not found"
+	t.Run("unknown custom emoji", func(t *testing.T) {
+		h := newHarness(t)
+		serveFail(h, http.MethodPost, "/reactions", http.StatusNotFound, "not found")
+		text, isErr := h.callTool(t, "react", map[string]any{"post_id": p, "emoji": "nope", "action": "add"})
+		wantErr(t, text, isErr, "unknown emoji :nope:")
+		if got := calls(h, true); !slices.Contains(got, "GET "+testutil.APIPrefix+"/emoji/name/nope") {
+			t.Fatalf("emoji not looked up: %q", got)
+		}
+	})
+	t.Run("existing custom emoji", func(t *testing.T) {
+		h := newHarness(t)
+		serveFail(h, http.MethodPost, "/reactions", http.StatusNotFound, "not found")
+		h.fake.Handle(http.MethodGet, "/emoji/name/{name}", func(w http.ResponseWriter, r *http.Request) {
+			testutil.WriteJSON(w, http.StatusOK, &model.Emoji{Id: postID("emoji"), Name: r.PathValue("name")})
+		})
+		text, isErr := h.callTool(t, "react", map[string]any{"post_id": p, "emoji": "partyparrot", "action": "add"})
+		wantErr(t, text, isErr, notFound)
+	})
+	t.Run("system emoji", func(t *testing.T) {
+		h := newHarness(t)
+		serveFail(h, http.MethodPost, "/reactions", http.StatusNotFound, "not found")
+		text, isErr := h.callTool(t, "react", map[string]any{"post_id": p, "emoji": "thumbsup", "action": "add"})
+		wantErr(t, text, isErr, notFound)
+		for _, r := range h.fake.Requests() {
+			if strings.Contains(r.Path, "/emoji/name/") {
+				t.Fatalf("emoji looked up: %s %s", r.Method, r.Path)
+			}
+		}
+	})
+}
+
 func TestReactRemove(t *testing.T) {
 	h := newHarness(t)
 	p := postID("p1")
@@ -473,21 +507,39 @@ func TestDM(t *testing.T) {
 	}
 }
 
+func TestDMLeadingAt(t *testing.T) {
+	h := newHarness(t)
+	h.fake.Handle(http.MethodPost, "/channels/direct", func(w http.ResponseWriter, _ *http.Request) {
+		testutil.WriteJSON(w, http.StatusCreated, fakeChannel(t, h, testutil.DMID))
+	})
+	got := h.callOK(t, "dm", map[string]any{"username": "@" + testutil.OwnerName})
+	want := "DM channel with @ivan.ch: " + testutil.DMName + " (id: " + testutil.DMID +
+		") — pass it as the channel to create_post"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := calls(h, true); !slices.Contains(got, "GET "+testutil.APIPrefix+"/users/username/"+testutil.OwnerName) {
+		t.Fatalf("username not looked up bare: %q", got)
+	}
+}
+
 func TestDMErrors(t *testing.T) {
 	t.Run("unknown user", func(t *testing.T) {
 		h := newHarness(t)
 		text, isErr := h.callTool(t, "dm", map[string]any{"username": "nobody"})
-		if !isErr || !strings.HasPrefix(text, "mattermost API 404 "+testutil.APIPrefix+"/users/username/nobody: ") {
-			t.Fatalf("got %q (isError %v)", text, isErr)
-		}
+		wantErr(t, text, isErr, "no user @nobody")
 		wantCalls(t, h)
 	})
-	t.Run("unknown user with a space", func(t *testing.T) {
+	t.Run("unknown user with @ and a space", func(t *testing.T) {
 		h := newHarness(t)
-		text, isErr := h.callTool(t, "dm", map[string]any{"username": "no body"})
-		if !isErr || !strings.HasPrefix(text, "mattermost API 404 "+testutil.APIPrefix+"/users/username/no%20body: ") {
-			t.Fatalf("got %q (isError %v)", text, isErr)
-		}
+		text, isErr := h.callTool(t, "dm", map[string]any{"username": "@no body"})
+		wantErr(t, text, isErr, "no user @no body")
+	})
+	t.Run("lookup fails", func(t *testing.T) {
+		h := newHarness(t)
+		serveFail(h, http.MethodGet, "/users/username/{username}", http.StatusForbidden, "denied")
+		text, isErr := h.callTool(t, "dm", map[string]any{"username": "nobody"})
+		wantErr(t, text, isErr, "mattermost API 403 "+testutil.APIPrefix+"/users/username/nobody: denied")
 	})
 	t.Run("dots refused", func(t *testing.T) { // Client4 would strip ".." and look up ivanch
 		h := newHarness(t)

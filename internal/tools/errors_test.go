@@ -21,7 +21,7 @@ func TestErrorText(t *testing.T) {
 		{"api error", apiErr, want403},
 		{"wrapped api error", fmt.Errorf("create post: %w", apiErr), "create post: " + want403},
 		{"wrapped orphan error", fmt.Errorf("post: %w", orphaned([]string{"f1", "f2"}, "the post", apiErr)),
-			"post: uploaded 2 file(s), then the post failed — file ids f1, f2 " + orphanNote + "; cause: " + want403},
+			"post: uploaded 2 files, then the post failed — file ids f1, f2 " + orphanNote + "; cause: " + want403},
 		{"no server message", &mattermost.APIError{Status: 502, Path: "/api/v4/users/me"},
 			"mattermost API 502 /api/v4/users/me: " + mattermost.NoServerMessage},
 		{"plain error", errors.New("channel not found: foo"), "channel not found: foo"},

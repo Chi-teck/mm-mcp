@@ -34,6 +34,23 @@ func TestHumanSize(t *testing.T) {
 	}
 }
 
+func TestPlural(t *testing.T) {
+	tests := []struct {
+		n    int
+		want string
+	}{
+		{0, "0 replies"},
+		{1, "1 reply"},
+		{2, "2 replies"},
+		{21, "21 replies"},
+	}
+	for _, tt := range tests {
+		if got := Plural(tt.n, "reply", "replies"); got != tt.want {
+			t.Errorf("Plural(%d) = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	marker := "\n**[truncated at 500 chars — " + FullHint + "]**"
 	tests := []struct {

@@ -107,7 +107,11 @@ func createPost(ctx context.Context, c *mattermost.Context, in createPostIn) (st
 
 	filesNote := ""
 	if len(fileIDs) > 0 {
-		filesNote = fmt.Sprintf(", %d file(s)", len(fileIDs))
+		filesNote = ", " + mattermost.Plural(len(fileIDs), "file", "files")
+	}
+	threadNote := ""
+	if in.ThreadRootID != "" {
+		threadNote = " in thread " + in.ThreadRootID
 	}
 	if in.ScheduleAt != "" {
 		sp := &model.ScheduledPost{
@@ -119,15 +123,15 @@ func createPost(ctx context.Context, c *mattermost.Context, in createPostIn) (st
 			return "", orphaned(fileIDs, "the post", mattermost.WrapErr("/api/v4/posts/schedule", err))
 		}
 		when := time.UnixMilli(at).Local().Format(scheduleLayout)
-		return fmt.Sprintf("Scheduled for %s in %s (scheduled post id: %s%s)",
-			when, c.ChannelLabel(ctx, ch), created.Id, filesNote), nil
+		return fmt.Sprintf("Scheduled for %s in %s%s (scheduled post id: %s%s)",
+			when, c.ChannelLabel(ctx, ch), threadNote, created.Id, filesNote), nil
 	}
 	post := &model.Post{ChannelId: ch.Id, RootId: in.ThreadRootID, Message: in.Message, FileIds: fileIDs}
 	created, _, err := c.Client().CreatePost(ctx, post)
 	if err != nil {
 		return "", orphaned(fileIDs, "the post", mattermost.WrapErr("/api/v4/posts", err))
 	}
-	return fmt.Sprintf("Posted to %s (post id: %s%s)", c.ChannelLabel(ctx, ch), created.Id, filesNote), nil
+	return fmt.Sprintf("Posted to %s%s (post id: %s%s)", c.ChannelLabel(ctx, ch), threadNote, created.Id, filesNote), nil
 }
 
 // checkThreadRoot refuses a thread root the server would reject only after the uploads: one
@@ -358,6 +362,6 @@ func orphaned(ids []string, what string, err error) error {
 	if len(ids) == 0 {
 		return err
 	}
-	return fmt.Errorf("uploaded %d file(s), then %s failed — file ids %s %s; cause: %w",
-		len(ids), what, strings.Join(ids, ", "), orphanNote, err)
+	return fmt.Errorf("uploaded %s, then %s failed — file ids %s %s; cause: %w",
+		mattermost.Plural(len(ids), "file", "files"), what, strings.Join(ids, ", "), orphanNote, err)
 }

@@ -274,12 +274,22 @@ func TestPinnedNoteAtMaxLimit(t *testing.T) {
 	}
 }
 
+func TestThreadNoteOneReply(t *testing.T) {
+	root := &model.Post{Id: postID("root"), ReplyCount: 5}
+	got := threadNote(threadList(root, true), root.Id, 1)
+	if want := "\n(newest 1 reply shown of 5 — pass limit=200 for more)"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func threadList(root *model.Post, hasNext bool, replies ...*model.Post) *model.PostList {
 	list := postList(append(replies, root)...)
 	list.HasNext = &hasNext
 	return list
 }
 
+// Every reply follows its own thread here, so all stay indented: the
+// `reply to <root>` form of channel pages never appears in the thread view.
 func TestReadPostsThread(t *testing.T) {
 	rootID := postID("root")
 	root := testPost(rootID, testutil.TestChannelID, testutil.OtherID, "question", 3*time.Hour)
@@ -382,6 +392,35 @@ func TestGetPost(t *testing.T) {
 	text := h.callOK(t, "get_post", map[string]any{"post_id": p.Id})
 	if want := "in " + testutil.TestChannel + ":\n**bob** (1h ago): hello (post " + p.Id + ")"; text != want {
 		t.Fatalf("got %q, want %q", text, want)
+	}
+}
+
+// get_post marks system messages and edits, and names the thread of a reply
+// (there is no line above it to indent under).
+func TestGetPostMarks(t *testing.T) {
+	rootID := postID("root")
+	cases := []struct {
+		name string
+		edit func(p *model.Post)
+		want string
+	}{
+		{"system", func(p *model.Post) { p.Type = model.PostTypeJoinChannel }, "[system] (1h ago): hello"},
+		{"edited", func(p *model.Post) { p.EditAt = p.CreateAt + 1 }, "**bob** (1h ago) (edited): hello"},
+		{"reply", func(p *model.Post) { p.RootId = rootID }, "**bob** (1h ago), reply to " + rootID + ": hello"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			p := testPost(postID("p1"), testutil.TestChannelID, testutil.OtherID, "hello", time.Hour)
+			tc.edit(p)
+			h.fake.Handle(http.MethodGet, "/posts/{post_id}", func(w http.ResponseWriter, _ *http.Request) {
+				testutil.WriteJSON(w, http.StatusOK, p)
+			})
+			text := h.callOK(t, "get_post", map[string]any{"post_id": p.Id})
+			if want := "in " + testutil.TestChannel + ":\n" + tc.want + " (post " + p.Id + ")"; text != want {
+				t.Fatalf("got %q, want %q", text, want)
+			}
+		})
 	}
 }
 

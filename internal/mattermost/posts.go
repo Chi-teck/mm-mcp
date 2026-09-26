@@ -72,9 +72,12 @@ func ShownPosts(list *model.PostList, limit int) (shown []*model.Post, total int
 
 // FormatPosts renders list: one line per post, oldest
 // first, ending in `(post <id>)`, replies as
-// `  ↳ … (post <id>, thread <root_id>)`, then `[file]`, unavailable-file and
-// `[reactions]` lines, and the paging hint when the server reports older
-// posts (prev_post_id) or the list was trimmed to opts.Limit. Usernames
+// `  ↳ … (post <id>, thread <root_id>)` when the line above is of the same
+// thread and as `…, reply to <root_id>: …` otherwise; system messages carry
+// `[system]` in place of the author and edited posts `(edited)` after the
+// time. Each post is followed by its `[file]`, unavailable-file and
+// `[reactions]` lines. The list ends in the paging hint when the server
+// reports older posts (prev_post_id) or the list was trimmed to opts.Limit. Usernames
 // come from names, by user id; a missing id is shown as is. An empty result is NoPosts.
 func FormatPosts(list *model.PostList, names map[string]string, now time.Time, opts PostsOptions) string {
 	shown, total := ShownPosts(list, opts.Limit)
@@ -82,17 +85,31 @@ func FormatPosts(list *model.PostList, names map[string]string, now time.Time, o
 		return NoPosts
 	}
 	var lines []string
+	// prevThread is the thread of the post on the line above: a reply is
+	// indented under it only when it belongs to the same thread.
+	prevThread := ""
 	for _, post := range shown {
-		who := AuthorName(names, post.UserId)
-		when := RelTime(post.CreateAt, now)
+		who := "**" + AuthorName(names, post.UserId) + "**"
+		if post.IsSystemMessage() {
+			who = "[system]"
+		}
+		when := "(" + RelTime(post.CreateAt, now) + ")"
+		if post.EditAt != 0 {
+			when += " (edited)"
+		}
 		body := post.Message
 		if !opts.Full {
 			body = Truncate(body, FullHint, MaxBodyChars)
 		}
-		if post.RootId != "" {
-			lines = append(lines, fmt.Sprintf("  ↳ **%s** (%s): %s (post %s, thread %s)", who, when, body, post.Id, post.RootId))
-		} else {
-			lines = append(lines, fmt.Sprintf("**%s** (%s): %s (post %s)", who, when, body, post.Id))
+		switch {
+		case post.RootId == "":
+			lines = append(lines, fmt.Sprintf("%s %s: %s (post %s)", who, when, body, post.Id))
+			prevThread = post.Id
+		case post.RootId == prevThread:
+			lines = append(lines, fmt.Sprintf("  ↳ %s %s: %s (post %s, thread %s)", who, when, body, post.Id, post.RootId))
+		default:
+			lines = append(lines, fmt.Sprintf("%s %s, reply to %s: %s (post %s)", who, when, post.RootId, body, post.Id))
+			prevThread = post.RootId
 		}
 		var files []*model.FileInfo
 		if post.Metadata != nil {
@@ -111,8 +128,8 @@ func FormatPosts(list *model.PostList, names map[string]string, now time.Time, o
 		}
 	}
 	if !opts.NoPaging && (total > len(shown) || list.PrevPostId != "") {
-		lines = append(lines, fmt.Sprintf("(%d posts shown — older posts exist, pass before=%s)",
-			len(shown), shown[0].Id))
+		lines = append(lines, fmt.Sprintf("(%s shown — older posts exist, pass before=%s)",
+			Plural(len(shown), "post", "posts"), shown[0].Id))
 	}
 	return strings.Join(lines, "\n")
 }

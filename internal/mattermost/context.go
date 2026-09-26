@@ -187,10 +187,15 @@ func CheckName(what, name string) error {
 // `channel not found: <name>`, followed by ` (did you mean: a, b)` when the
 // user's own channels in the team contain the name as a case-insensitive
 // substring of their name or display name (at most maxSuggestions, ranked
-// by suggestionRank, then alphabetically). An empty channel is refused.
+// by suggestionRank, then alphabetically). An empty channel is refused, and
+// so is an @username, with a pointer to the dm tool.
 func (c *Context) ResolveChannel(ctx context.Context, channel string) (*model.Channel, error) {
 	if strings.TrimSpace(channel) == "" {
 		return nil, errors.New("channel is required (a name or id)")
+	}
+	// Channel names can't contain "@": the value is a username, and opening a DM stays explicit.
+	if name, ok := strings.CutPrefix(channel, "@"); ok {
+		return nil, fmt.Errorf("%q is a user, not a channel: open the DM with dm(username=%q) and pass the channel it returns", channel, name)
 	}
 	if IsID(channel) {
 		if ch, ok := c.cachedChannel("id:" + channel); ok {

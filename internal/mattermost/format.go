@@ -50,3 +50,11 @@ func Truncate(body, hint string, limit int) string {
 	}
 	return body
 }
+
+// Plural renders a count with its noun: `1 reply`, `3 replies`.
+func Plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}

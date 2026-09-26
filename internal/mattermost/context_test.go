@@ -341,6 +341,18 @@ func TestResolveChannelIDShapedName(t *testing.T) {
 	}
 }
 
+func TestResolveChannelUsername(t *testing.T) {
+	c, fake := newTestContext(t)
+	_, err := c.ResolveChannel(t.Context(), "@alice")
+	want := `"@alice" is a user, not a channel: open the DM with dm(username="alice") and pass the channel it returns`
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v, want %q", err, want)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Fatalf("%d requests sent, want 0", n)
+	}
+}
+
 func TestResolveChannelEmpty(t *testing.T) {
 	for _, in := range []string{"", "  \t"} {
 		c, fake := newTestContext(t)

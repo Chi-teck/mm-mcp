@@ -56,11 +56,14 @@ func TestSearchPosts(t *testing.T) {
 	if lines[0] != wantFirst {
 		t.Fatalf("first line:\n got %q\nwant %q", lines[0], wantFirst)
 	}
-	wantMarker := "**[truncated at 500 chars — read it with read_posts full=true]** (post " + long.Id + ")"
+	wantMarker := "**[truncated at 500 chars — read it with get_post full=true]** (post " + long.Id + ")"
 	if lines[1] != wantMarker {
 		t.Fatalf("marker line:\n got %q\nwant %q", lines[1], wantMarker)
 	}
-	hits := lines[2:]
+	if note := "(30 of 33 matches shown — refine the query)"; lines[len(lines)-1] != note {
+		t.Fatalf("last line = %q, want %q", lines[len(lines)-1], note)
+	}
+	hits := lines[2 : len(lines)-1]
 	if len(hits) != 29 {
 		t.Fatalf("got %d hit lines after the long one, want 29:\n%s", len(hits), text)
 	}
@@ -92,8 +95,49 @@ func TestSearchPosts(t *testing.T) {
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Terms == nil || *body.Terms != "hit" || body.IsOrSearch == nil || *body.IsOrSearch {
-		t.Errorf("search body = %s, want terms=hit is_or_search=false", req.Body)
+	if body.Terms == nil || *body.Terms != "hit" || body.IsOrSearch == nil || *body.IsOrSearch ||
+		body.PerPage == nil || *body.PerPage != 100 {
+		t.Errorf("search body = %s, want terms=hit is_or_search=false per_page=100", req.Body)
+	}
+}
+
+func TestSearchPostsCapNote(t *testing.T) {
+	for _, tc := range []struct {
+		hits, deleted int
+		note          string
+	}{
+		{30, 0, ""},
+		{31, 0, "(30 of 31 matches shown — refine the query)"},
+		{99, 0, "(30 of 99 matches shown — refine the query)"},
+		{100, 0, "(30 of 100+ matches shown — refine the query)"},
+		// A full page is a floor even when tombstones are dropped from the count.
+		{100, 5, "(30 of 95+ matches shown — refine the query)"},
+	} {
+		t.Run(fmt.Sprintf("%d-%d", tc.hits, tc.deleted), func(t *testing.T) {
+			h := newHarness(t)
+			list := model.NewPostList()
+			for i := range tc.hits {
+				p := testPost(postID(fmt.Sprintf("c%03d", i)), testutil.TestChannelID, testutil.OtherID, "hit", time.Duration(i+1)*time.Minute)
+				if i < tc.deleted {
+					p.DeleteAt = p.CreateAt
+				}
+				list.AddPost(p)
+				list.AddOrder(p.Id)
+			}
+			h.fake.Handle(http.MethodPost, "/teams/{team_id}/posts/search", func(w http.ResponseWriter, _ *http.Request) {
+				testutil.WriteJSON(w, http.StatusOK, list)
+			})
+			lines := strings.Split(h.callOK(t, "search", map[string]any{"query": "hit", "type": "posts"}), "\n")
+			if tc.note == "" {
+				if len(lines) != 30 || strings.HasPrefix(lines[29], "(") {
+					t.Fatalf("got %d lines, last %q; want 30 hits and no note", len(lines), lines[len(lines)-1])
+				}
+				return
+			}
+			if len(lines) != 31 || lines[30] != tc.note {
+				t.Fatalf("got %d lines, last %q; want 30 hits and %q", len(lines), lines[len(lines)-1], tc.note)
+			}
+		})
 	}
 }
 
@@ -104,6 +148,20 @@ func TestSearchPostsNone(t *testing.T) {
 	})
 	if text := h.callOK(t, "search", map[string]any{"query": `a "b"`, "type": "posts"}); text != `No posts found for "a "b"".` {
 		t.Fatalf("got %q", text)
+	}
+}
+
+func TestSearchPostsSystem(t *testing.T) {
+	h := newHarness(t)
+	sys := testPost(postID("sys"), testutil.TestChannelID, testutil.OtherID, "bob joined the channel.", time.Hour)
+	sys.Type = model.PostTypeJoinChannel
+	h.fake.Handle(http.MethodPost, "/teams/{team_id}/posts/search", func(w http.ResponseWriter, _ *http.Request) {
+		testutil.WriteJSON(w, http.StatusOK, postList(sys))
+	})
+	text := h.callOK(t, "search", map[string]any{"query": "joined", "type": "posts"})
+	want := "[system] (1h ago) in " + testutil.TestChannel + ": bob joined the channel. (post " + sys.Id + ")"
+	if text != want {
+		t.Fatalf("got %q, want %q", text, want)
 	}
 }
 
@@ -122,8 +180,11 @@ func TestSearchFiles(t *testing.T) {
 	})
 	text := h.callOK(t, "search", map[string]any{"query": "report", "type": "files"})
 	lines := strings.Split(text, "\n")
-	if len(lines) != 30 {
-		t.Fatalf("got %d lines, want 30", len(lines))
+	if len(lines) != 31 {
+		t.Fatalf("got %d lines, want 30 hits and the note", len(lines))
+	}
+	if note := "(30 of 31 matches shown — refine the query)"; lines[30] != note {
+		t.Fatalf("note = %q, want %q", lines[30], note)
 	}
 	want := "[file] r0.pdf (application/pdf, 1.2 MB, id: " + postID("f00") + ") [" + testutil.TestChannel + "]"
 	if lines[0] != want {
@@ -133,8 +194,8 @@ func TestSearchFiles(t *testing.T) {
 		t.Errorf("unresolved channel: got %q, want suffix %q", lines[1], want)
 	}
 	req := lastRequest(t, h, "/api/v4/teams/"+testutil.TeamID+"/files/search")
-	if !strings.Contains(string(req.Body), `"is_or_search":false`) {
-		t.Errorf("body = %s, want is_or_search false", req.Body)
+	if !strings.Contains(string(req.Body), `"is_or_search":false`) || !strings.Contains(string(req.Body), `"per_page":100`) {
+		t.Errorf("body = %s, want is_or_search false and per_page 100", req.Body)
 	}
 }
 
@@ -193,13 +254,21 @@ func TestListMembers(t *testing.T) {
 		})
 	})
 	text := h.callOK(t, "list_members", map[string]any{"channel": testutil.TestChannel})
-	want := "- ivan.ch — Ivan Ch\n- bob — Bob\n- alice"
+	want := "- ivan.ch — Ivan Ch\n- bob — Bob\n- alice\n(3 members)"
 	if text != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", text, want)
 	}
 	req := lastRequest(t, h, "/api/v4/users")
 	if req.Query.Get("in_channel") != testutil.TestChannelID || req.Query.Get("per_page") != "200" {
 		t.Errorf("query = %v", req.Query)
+	}
+}
+
+func TestListMembersOne(t *testing.T) {
+	h := newHarness(t)
+	serveMembers(h, 1)
+	if text := h.callOK(t, "list_members", map[string]any{"channel": testutil.TestChannel}); text != "- user0\n(1 member)" {
+		t.Fatalf("got %q", text)
 	}
 }
 
@@ -221,15 +290,17 @@ func TestListMembersCap(t *testing.T) {
 			serveMembers(h, tc.total)
 			text := h.callOK(t, "list_members", map[string]any{"channel": testutil.TestChannel})
 			lines := strings.Split(text, "\n")
-			marker := "(first 1000 members — pass query to search)"
-			wantLines := min(tc.total, 1000)
+			// The cap note replaces the count footer: it already gives the count.
+			footer := fmt.Sprintf("(%d members)", tc.total)
 			if tc.marker {
-				wantLines++
-				if lines[len(lines)-1] != marker {
-					t.Fatalf("last line = %q, want %q", lines[len(lines)-1], marker)
-				}
-			} else if strings.Contains(text, marker) {
-				t.Fatalf("unexpected cap marker")
+				footer = "(first 1000 members — pass query to search)"
+			}
+			wantLines := min(tc.total, 1000) + 1
+			if lines[len(lines)-1] != footer {
+				t.Fatalf("last line = %q, want %q", lines[len(lines)-1], footer)
+			}
+			if strings.Count(text, "\n(") != 1 {
+				t.Fatalf("want exactly one footer line, got tail %q", lines[len(lines)-2:])
 			}
 			if len(lines) != wantLines {
 				t.Fatalf("got %d lines, want %d", len(lines), wantLines)
@@ -259,12 +330,15 @@ func TestListMembersQuery(t *testing.T) {
 	h := newHarness(t)
 	h.fake.Handle(http.MethodGet, "/users/autocomplete", func(w http.ResponseWriter, _ *http.Request) {
 		testutil.WriteJSON(w, http.StatusOK, model.UserAutocomplete{
-			Users:        []*model.User{{Id: testutil.OwnerID, Username: "ivan.ch", FirstName: "Ivan", LastName: "Ch"}},
+			Users: []*model.User{
+				{Id: testutil.OwnerID, Username: "ivan.ch", FirstName: "Ivan", LastName: "Ch"},
+				{Id: testutil.MeID, Username: "ivanov"},
+			},
 			OutOfChannel: []*model.User{{Id: testutil.OtherID, Username: "ivana"}},
 		})
 	})
 	text := h.callOK(t, "list_members", map[string]any{"channel": testutil.TestChannel, "query": "iva"})
-	want := "- ivan.ch — Ivan Ch\n- ivana [NOT in channel — mentions won't notify]"
+	want := "- ivan.ch — Ivan Ch\n- ivanov\n- ivana [NOT in channel — mentions won't notify]\n(3 matches, 1 not in channel)"
 	if text != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", text, want)
 	}
@@ -275,6 +349,17 @@ func TestListMembersQuery(t *testing.T) {
 	}
 	if q.Has("limit") || q.Has("page") {
 		t.Errorf("query = %v, want the server's default limit and no paging", q)
+	}
+}
+
+func TestListMembersQueryAllIn(t *testing.T) {
+	h := newHarness(t)
+	h.fake.Handle(http.MethodGet, "/users/autocomplete", func(w http.ResponseWriter, _ *http.Request) {
+		testutil.WriteJSON(w, http.StatusOK, model.UserAutocomplete{Users: []*model.User{{Id: testutil.OwnerID, Username: "ivan.ch"}}})
+	})
+	text := h.callOK(t, "list_members", map[string]any{"channel": testutil.TestChannel, "query": "iva"})
+	if want := "- ivan.ch\n(1 match)"; text != want {
+		t.Fatalf("got %q, want %q", text, want)
 	}
 }
 

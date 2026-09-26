@@ -30,7 +30,7 @@ type editPostIn struct {
 }
 
 type dmIn struct {
-	Username string `json:"username" jsonschema:"Username without @"`
+	Username string `json:"username" jsonschema:"Username, e.g. ivan.ch (a leading @ is ignored)"`
 }
 
 // registerMisc adds follow_thread, unfollow_thread, react, edit_post and dm.
@@ -52,7 +52,7 @@ func registerMisc(s *mcp.Server, c *mattermost.Context) {
 		func(ctx context.Context, in editPostIn) (string, error) { return editPost(ctx, c, in) },
 		enum("action", "edit", "delete"))
 	addTool(s, "dm",
-		"Open (or reuse) a direct-message channel with a user by username and return its channel name.",
+		"Open (or reuse) a direct-message channel with a user by username (a leading @ is ignored) and return its channel name.",
 		func(ctx context.Context, in dmIn) (string, error) { return openDM(ctx, c, in.Username) })
 }
 
@@ -107,7 +107,15 @@ func react(ctx context.Context, c *mattermost.Context, in reactIn) (string, erro
 	reaction := &model.Reaction{UserId: me.Id, PostId: in.PostID, EmojiName: emoji}
 	if in.Action == "add" {
 		if _, _, err := c.Client().SaveReaction(ctx, reaction); err != nil {
-			return "", mattermost.WrapErr("/api/v4/reactions", err)
+			err = mattermost.WrapErr("/api/v4/reactions", err)
+			// A 404 doesn't tell a missing post from an unknown emoji; only a custom emoji can be unknown.
+			if mattermost.IsNotFound(err) && !model.IsSystemEmojiName(emoji) {
+				_, _, lookupErr := c.Client().GetEmojiByName(ctx, emoji)
+				if mattermost.IsNotFound(mattermost.WrapErr("/api/v4/emoji/name/"+url.PathEscape(emoji), lookupErr)) {
+					return "", fmt.Errorf("unknown emoji :%s:", emoji)
+				}
+			}
+			return "", err
 		}
 		return fmt.Sprintf("Added :%s: on post %s", emoji, in.PostID), nil
 	}
@@ -179,14 +187,20 @@ func editPost(ctx context.Context, c *mattermost.Context, in editPostIn) (string
 	return "Deleted post " + in.PostID, nil
 }
 
-// openDM opens or reuses the direct channel between the user and username.
+// openDM opens or reuses the direct channel between the user and username; one leading "@" is
+// stripped.
 func openDM(ctx context.Context, c *mattermost.Context, username string) (string, error) {
+	username = strings.TrimPrefix(username, "@")
 	if err := mattermost.CheckName("username", username); err != nil {
 		return "", err
 	}
 	user, _, err := c.Client().GetUserByUsername(ctx, username, "")
 	if err != nil {
-		return "", mattermost.WrapErr("/api/v4/users/username/"+url.PathEscape(username), err)
+		err = mattermost.WrapErr("/api/v4/users/username/"+url.PathEscape(username), err)
+		if mattermost.IsNotFound(err) {
+			return "", fmt.Errorf("no user @%s", username)
+		}
+		return "", err
 	}
 	if !strings.EqualFold(user.Username, username) {
 		return "", fmt.Errorf("mattermost returned @%s for username %q; refusing to open the DM", user.Username, username)

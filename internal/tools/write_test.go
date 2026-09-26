@@ -116,7 +116,7 @@ func TestCreatePost(t *testing.T) {
 	got := h.callOK(t, "create_post", map[string]any{
 		"channel": testutil.TestChannel, "message": "hi *there*", "thread_root_id": postID("root"),
 	})
-	if want := "Posted to mm-test (post id: " + postID("new") + ")"; got != want {
+	if want := "Posted to mm-test in thread " + postID("root") + " (post id: " + postID("new") + ")"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	wantCalls(t, h, "POST "+postsPath)
@@ -140,6 +140,14 @@ func TestCreatePostInDM(t *testing.T) {
 	}
 }
 
+func TestCreatePostToUsername(t *testing.T) {
+	h := newHarness(t)
+	servePosts201(h)
+	text, isErr := h.callTool(t, "create_post", map[string]any{"channel": "@" + testutil.OwnerName, "message": "hi"})
+	wantErr(t, text, isErr, `"@ivan.ch" is a user, not a channel: open the DM with dm(username="ivan.ch") and pass the channel it returns`)
+	wantCalls(t, h)
+}
+
 func TestCreatePostWithAttachments(t *testing.T) {
 	root := resolvedTempDir(t)
 	a := writeFile(t, filepath.Join(root, "a.txt"), "alpha")
@@ -154,7 +162,7 @@ func TestCreatePostWithAttachments(t *testing.T) {
 	got := h.callOK(t, "create_post", map[string]any{
 		"channel": testutil.TestChannel, "message": "  ", "attachments": []string{a, "b.txt"},
 	})
-	if want := "Posted to mm-test (post id: " + postID("new") + ", 2 file(s))"; got != want {
+	if want := "Posted to mm-test (post id: " + postID("new") + ", 2 files)"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 	wantCalls(t, h, "POST "+filesPath, "POST "+filesPath, "POST "+postsPath)
@@ -180,10 +188,12 @@ func TestCreatePostScheduled(t *testing.T) {
 	h := newRootHarness(t, root)
 	serveUploads(t, h)
 	servePosts201(h)
+	serveRoot(h, &model.Post{Id: postID("root"), ChannelId: testutil.TestChannelID})
 
 	before := time.Now()
 	got := h.callOK(t, "create_post", map[string]any{
 		"channel": testutil.TestChannelID, "message": "later", "schedule_at": "2h", "attachments": []string{a},
+		"thread_root_id": postID("root"),
 	})
 	wantCalls(t, h, "POST "+filesPath, "POST "+schedulePath)
 	var sent model.ScheduledPost
@@ -191,14 +201,23 @@ func TestCreatePostScheduled(t *testing.T) {
 	if d := time.UnixMilli(sent.ScheduledAt).Sub(before); d < 2*time.Hour-time.Second || d > 2*time.Hour+time.Minute {
 		t.Fatalf("scheduled_at %d is %v from now", sent.ScheduledAt, d)
 	}
-	if sent.ChannelId != testutil.TestChannelID || sent.Message != "later" ||
+	if sent.ChannelId != testutil.TestChannelID || sent.Message != "later" || sent.RootId != postID("root") ||
 		!slices.Equal([]string(sent.FileIds), []string{fileID("a.txt")}) {
 		t.Fatalf("scheduled post sent: %+v", &sent)
 	}
 	when := time.UnixMilli(sent.ScheduledAt).Local().Format("2006-01-02 15:04 MST")
-	want := "Scheduled for " + when + " in mm-test (scheduled post id: " + postID("sched") + ", 1 file(s))"
+	want := "Scheduled for " + when + " in mm-test in thread " + postID("root") + " (scheduled post id: " + postID("sched") + ", 1 file)"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestCreatePostScheduledNoThread(t *testing.T) {
+	h := newHarness(t)
+	servePosts201(h)
+	got := h.callOK(t, "create_post", map[string]any{"channel": testutil.TestChannel, "message": "later", "schedule_at": "2h"})
+	if !strings.HasSuffix(got, " in mm-test (scheduled post id: "+postID("sched")+")") {
+		t.Fatalf("got %q", got)
 	}
 }
 
@@ -372,7 +391,7 @@ func TestCreatePostSizeUnknown(t *testing.T) {
 			got := h.callOK(t, "create_post", map[string]any{
 				"channel": testutil.TestChannel, "message": "x", "attachments": []string{big},
 			})
-			if !strings.HasSuffix(got, ", 1 file(s))") {
+			if !strings.HasSuffix(got, ", 1 file)") {
 				t.Fatalf("got %q", got)
 			}
 		})
@@ -573,7 +592,7 @@ func TestCreatePostRootRecreated(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, path, "alpha")
-	if got := h.callOK(t, "create_post", args); !strings.HasSuffix(got, ", 1 file(s))") {
+	if got := h.callOK(t, "create_post", args); !strings.HasSuffix(got, ", 1 file)") {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -605,9 +624,9 @@ func TestCreatePostFailures(t *testing.T) {
 	root := resolvedTempDir(t)
 	a := writeFile(t, filepath.Join(root, "a.txt"), "alpha")
 	b := writeFile(t, filepath.Join(root, "b.txt"), "bravo")
-	orphan := func(n int, what, ids, cause string) string {
-		return fmt.Sprintf("uploaded %d file(s), then %s failed — file ids %s are orphaned on the server and cannot be "+
-			"deleted (Mattermost only deletes a file with the post that carries it); cause: %s", n, what, ids, cause)
+	orphan := func(files, what, ids, cause string) string {
+		return fmt.Sprintf("uploaded %s, then %s failed — file ids %s are orphaned on the server and cannot be "+
+			"deleted (Mattermost only deletes a file with the post that carries it); cause: %s", files, what, ids, cause)
 	}
 	cases := []struct {
 		name     string
@@ -621,15 +640,15 @@ func TestCreatePostFailures(t *testing.T) {
 		{"first upload fails", false, []string{a, b}, "a.txt", false,
 			"mattermost API 413 " + filesPath + ": too big", []string{"POST " + filesPath}},
 		{"second upload fails", false, []string{a, b}, "b.txt", false,
-			orphan(1, b, fileID("a.txt"), "mattermost API 413 "+filesPath+": too big"),
+			orphan("1 file", b, fileID("a.txt"), "mattermost API 413 "+filesPath+": too big"),
 			[]string{"POST " + filesPath, "POST " + filesPath}},
 		{"post fails after uploads", false, []string{a, b}, "", true,
-			orphan(2, "the post", fileID("a.txt")+", "+fileID("b.txt"), "mattermost API 403 "+postsPath+": denied"),
+			orphan("2 files", "the post", fileID("a.txt")+", "+fileID("b.txt"), "mattermost API 403 "+postsPath+": denied"),
 			[]string{"POST " + filesPath, "POST " + filesPath, "POST " + postsPath}},
 		{"post fails without uploads", false, nil, "", true,
 			"mattermost API 403 " + postsPath + ": denied", []string{"POST " + postsPath}},
 		{"schedule fails after upload", true, []string{a}, "", true,
-			orphan(1, "the post", fileID("a.txt"), "mattermost API 403 "+schedulePath+": denied"),
+			orphan("1 file", "the post", fileID("a.txt"), "mattermost API 403 "+schedulePath+": denied"),
 			[]string{"POST " + filesPath, "POST " + schedulePath}},
 		{"schedule fails without uploads", true, nil, "", true,
 			"mattermost API 403 " + schedulePath + ": denied", []string{"POST " + schedulePath}},

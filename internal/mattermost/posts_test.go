@@ -83,7 +83,7 @@ func TestFormatPosts(t *testing.T) {
 				&model.Post{Id: "p2", UserId: "u1", CreateAt: ago(10 * time.Minute), Message: "plain",
 					Metadata: &model.PostMetadata{}},
 			),
-			want: "  ↳ **bob** (30m ago): late reply (post r1, thread elsewhere)\n" +
+			want: "**bob** (30m ago), reply to elsewhere: late reply (post r1)\n" +
 				"  [file] big.iso (application/octet-stream, 3.0 GB, id: f1)\n" +
 				"  [reactions] :eyes: 1\n" +
 				"**alice** (10m ago): plain (post p2)",
@@ -128,9 +128,72 @@ func TestFormatPosts(t *testing.T) {
 		},
 		{
 			name: "truncated reply keeps thread suffix after marker",
-			list: postList("", &model.Post{Id: "r1", UserId: "u2", CreateAt: ago(time.Second), Message: long, RootId: "root"}),
-			want: "  ↳ **bob** (just now): " + strings.Repeat("x", 500) +
+			list: postList("",
+				&model.Post{Id: "root", UserId: "u1", CreateAt: ago(time.Minute), Message: "q"},
+				&model.Post{Id: "r1", UserId: "u2", CreateAt: ago(time.Second), Message: long, RootId: "root"},
+			),
+			want: "**alice** (1m ago): q (post root)\n" +
+				"  ↳ **bob** (just now): " + strings.Repeat("x", 500) +
 				"\n**[truncated at 500 chars — pass full=true for the whole message]** (post r1, thread root)",
+		},
+		{
+			name: "truncated reply to another thread keeps post suffix after marker",
+			list: postList("", &model.Post{Id: "r1", UserId: "u2", CreateAt: ago(time.Second), Message: long, RootId: "root"}),
+			want: "**bob** (just now), reply to root: " + strings.Repeat("x", 500) +
+				"\n**[truncated at 500 chars — pass full=true for the whole message]** (post r1)",
+		},
+		{
+			name: "reply to another thread is not indented under the root above",
+			list: postList("",
+				&model.Post{Id: "a", UserId: "u1", CreateAt: ago(4 * time.Hour), Message: "root a"},
+				&model.Post{Id: "a1", UserId: "u2", CreateAt: ago(3 * time.Hour), Message: "on a", RootId: "a"},
+				&model.Post{Id: "b1", UserId: "u2", CreateAt: ago(2 * time.Hour), Message: "on b", RootId: "b"},
+				&model.Post{Id: "b2", UserId: "u1", CreateAt: ago(time.Hour), Message: "on b again", RootId: "b"},
+				&model.Post{Id: "a2", UserId: "u1", CreateAt: ago(time.Minute), Message: "back on a", RootId: "a"},
+			),
+			want: "**alice** (4h ago): root a (post a)\n" +
+				"  ↳ **bob** (3h ago): on a (post a1, thread a)\n" +
+				"**bob** (2h ago), reply to b: on b (post b1)\n" +
+				"  ↳ **alice** (1h ago): on b again (post b2, thread b)\n" +
+				"**alice** (1m ago), reply to a: back on a (post a2)",
+		},
+		{
+			name: "reply after a root of another thread",
+			list: postList("",
+				&model.Post{Id: "a", UserId: "u1", CreateAt: ago(2 * time.Hour), Message: "root a"},
+				&model.Post{Id: "b1", UserId: "u2", CreateAt: ago(time.Hour), Message: "on b", RootId: "b"},
+			),
+			want: "**alice** (2h ago): root a (post a)\n" +
+				"**bob** (1h ago), reply to b: on b (post b1)",
+		},
+		{
+			name: "system messages",
+			list: postList("",
+				&model.Post{Id: "s1", UserId: "u1", CreateAt: ago(2 * time.Hour), Type: model.PostTypeJoinChannel,
+					Message: "alice joined the channel."},
+				&model.Post{Id: "s2", UserId: "u1", CreateAt: ago(time.Hour), Type: model.PostTypeAddToChannel, RootId: "s1",
+					Message: "bob added to the channel by alice."},
+				&model.Post{Id: "s3", UserId: "u1", CreateAt: ago(time.Minute), Type: model.PostTypeAddToChannel, RootId: "x",
+					Message: "bob added to the channel by alice."},
+				&model.Post{Id: "m1", UserId: "u2", CreateAt: ago(time.Second), Type: model.PostTypeMe, Message: "waves"},
+			),
+			want: "[system] (2h ago): alice joined the channel. (post s1)\n" +
+				"  ↳ [system] (1h ago): bob added to the channel by alice. (post s2, thread s1)\n" +
+				"[system] (1m ago), reply to x: bob added to the channel by alice. (post s3)\n" +
+				"**bob** (just now): waves (post m1)",
+		},
+		{
+			name: "edited posts",
+			list: postList("",
+				&model.Post{Id: "root", UserId: "u1", CreateAt: ago(2 * time.Hour), EditAt: ago(time.Hour), Message: "fixed"},
+				&model.Post{Id: "r1", UserId: "u2", CreateAt: ago(time.Hour), EditAt: ago(time.Minute), Message: "also fixed", RootId: "root"},
+				&model.Post{Id: "r2", UserId: "u2", CreateAt: ago(time.Minute), EditAt: ago(time.Second), Message: "other", RootId: "x"},
+				&model.Post{Id: "p2", UserId: "u1", CreateAt: ago(time.Second), UpdateAt: ago(0), Message: "reacted to"},
+			),
+			want: "**alice** (2h ago) (edited): fixed (post root)\n" +
+				"  ↳ **bob** (1h ago) (edited): also fixed (post r1, thread root)\n" +
+				"**bob** (1m ago) (edited), reply to x: other (post r2)\n" +
+				"**alice** (just now): reacted to (post p2)",
 		},
 		{
 			name: "no limit, paging hint from prev_post_id",
@@ -151,6 +214,15 @@ func TestFormatPosts(t *testing.T) {
 			opts: PostsOptions{Limit: 2},
 			want: "**bob** (2h ago): two (post p2)\n**alice** (1h ago): three (post p3)\n" +
 				"(2 posts shown — older posts exist, pass before=p2)",
+		},
+		{
+			name: "trimmed to one post",
+			list: postList("",
+				&model.Post{Id: "p1", UserId: "u1", CreateAt: ago(2 * time.Hour), Message: "one"},
+				&model.Post{Id: "p2", UserId: "u2", CreateAt: ago(time.Hour), Message: "two"},
+			),
+			opts: PostsOptions{Limit: 1},
+			want: "**bob** (1h ago): two (post p2)\n(1 post shown — older posts exist, pass before=p2)",
 		},
 		{
 			name: "deleted posts do not count toward limit",

@@ -152,7 +152,7 @@ func TestE2ECallEachTool(t *testing.T) {
 		{"read_posts", map[string]any{"channel": testutil.TestChannel}, "**bob** (1h ago): hello (post " + post.Id + ")"},
 		{"get_post", map[string]any{"post_id": post.Id}, "in " + testutil.TestChannel + ":\n**bob** (1h ago): hello (post " + post.Id + ")"},
 		{"search", map[string]any{"query": "nothing", "type": "posts"}, `No posts found for "nothing".`},
-		{"list_members", map[string]any{"channel": testutil.TestChannel}, "- " + testutil.OwnerName},
+		{"list_members", map[string]any{"channel": testutil.TestChannel}, "- " + testutil.OwnerName + "\n(1 member)"},
 		{"get_file", map[string]any{"file_id": testFileID},
 			"Saved " + filepath.Join(dir, "report.txt") + " (file id: " + testFileID + ")"},
 		{"follow_thread", map[string]any{"thread_root_id": root}, "Following thread " + root},
