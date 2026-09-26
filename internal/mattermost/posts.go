@@ -101,11 +101,11 @@ func FormatPosts(list *model.PostList, names map[string]string, now time.Time, o
 		if !opts.Full {
 			body = Truncate(body, FullHint, MaxBodyChars)
 		}
-		switch {
-		case post.RootId == "":
+		switch post.RootId {
+		case "":
 			lines = append(lines, fmt.Sprintf("%s %s: %s (post %s)", who, when, body, post.Id))
 			prevThread = post.Id
-		case post.RootId == prevThread:
+		case prevThread:
 			lines = append(lines, fmt.Sprintf("  ↳ %s %s: %s (post %s, thread %s)", who, when, body, post.Id, post.RootId))
 		default:
 			lines = append(lines, fmt.Sprintf("%s %s, reply to %s: %s (post %s)", who, when, post.RootId, body, post.Id))

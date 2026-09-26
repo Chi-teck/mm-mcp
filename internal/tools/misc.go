@@ -112,7 +112,7 @@ func react(ctx context.Context, c *mattermost.Context, in reactIn) (string, erro
 			if mattermost.IsNotFound(err) && !model.IsSystemEmojiName(emoji) {
 				_, _, lookupErr := c.Client().GetEmojiByName(ctx, emoji)
 				if mattermost.IsNotFound(mattermost.WrapErr("/api/v4/emoji/name/"+url.PathEscape(emoji), lookupErr)) {
-					return "", fmt.Errorf("unknown emoji :%s:", emoji)
+					return "", fmt.Errorf("unknown emoji %q", emoji)
 				}
 			}
 			return "", err

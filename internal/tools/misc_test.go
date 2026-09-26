@@ -201,7 +201,7 @@ func TestReactAddUnknownEmoji(t *testing.T) {
 		h := newHarness(t)
 		serveFail(h, http.MethodPost, "/reactions", http.StatusNotFound, "not found")
 		text, isErr := h.callTool(t, "react", map[string]any{"post_id": p, "emoji": "nope", "action": "add"})
-		wantErr(t, text, isErr, "unknown emoji :nope:")
+		wantErr(t, text, isErr, `unknown emoji "nope"`)
 		if got := calls(h, true); !slices.Contains(got, "GET "+testutil.APIPrefix+"/emoji/name/nope") {
 			t.Fatalf("emoji not looked up: %q", got)
 		}
