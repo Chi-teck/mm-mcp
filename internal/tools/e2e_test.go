@@ -19,23 +19,21 @@ import (
 // e2eAnnotations is the expected annotation table: readOnly, destructive, idempotent, openWorld. Kept
 // independent of the annotations map so a table typo cannot hide itself.
 var e2eAnnotations = map[string][4]bool{
-	"list_channels":   {true, false, false, true},
-	"read_posts":      {true, false, false, true},
-	"get_post":        {true, false, false, true},
-	"search":          {true, false, false, true},
-	"list_members":    {true, false, false, true},
-	"get_file":        {false, false, false, true},
-	"follow_thread":   {false, false, true, true},
-	"unfollow_thread": {false, false, true, true},
-	"create_post":     {false, false, false, true},
-	"react":           {false, true, true, true},
-	"edit_post":       {false, true, false, true},
-	"dm":              {false, false, true, true},
-	"api":             {false, true, false, true},
-	"whoami":          {true, false, false, false},
+	"list_channels": {true, false, false, true},
+	"read_posts":    {true, false, false, true},
+	"get_post":      {true, false, false, true},
+	"search":        {true, false, false, true},
+	"list_members":  {true, false, false, true},
+	"get_file":      {false, false, false, true},
+	"create_post":   {false, false, false, true},
+	"react":         {false, true, true, true},
+	"edit_post":     {false, true, false, true},
+	"dm":            {false, false, true, true},
+	"api":           {false, true, false, true},
+	"whoami":        {true, false, false, false},
 }
 
-// TestE2EListTools checks tools/list over the in-memory transport: exactly the 14 tools,
+// TestE2EListTools checks tools/list over the in-memory transport: exactly the 12 tools,
 // their annotations, and a description on every tool and input property.
 func TestE2EListTools(t *testing.T) {
 	h := newHarness(t)
@@ -113,7 +111,7 @@ func TestE2ECallEachTool(t *testing.T) {
 	servePosts(h, "/channels/{channel_id}/posts", postList(post))
 	f.Handle(http.MethodGet, "/posts/{post_id}", func(w http.ResponseWriter, r *http.Request) {
 		if id := r.PathValue("post_id"); id != post.Id {
-			testutil.WriteJSON(w, http.StatusOK, &model.Post{Id: id, ChannelId: testutil.TestChannelID, UserId: testutil.MeID, ReplyCount: 1})
+			testutil.WriteJSON(w, http.StatusOK, &model.Post{Id: id, ChannelId: testutil.TestChannelID, UserId: testutil.MeID})
 			return
 		}
 		testutil.WriteJSON(w, http.StatusOK, post)
@@ -125,8 +123,6 @@ func TestE2ECallEachTool(t *testing.T) {
 		testutil.WriteJSON(w, http.StatusOK, []*model.User{{Id: testutil.OwnerID, Username: testutil.OwnerName}})
 	})
 	serveFile(h, `attachment; filename="report.txt"`, "payload")
-	serveOK(h, http.MethodPut, "/users/{user_id}/teams/{team_id}/threads/{thread_id}/following")
-	serveOK(h, http.MethodDelete, "/users/{user_id}/teams/{team_id}/threads/{thread_id}/following")
 	servePosts201(h)
 	f.Handle(http.MethodPost, "/reactions", func(w http.ResponseWriter, r *http.Request) {
 		var in model.Reaction
@@ -155,9 +151,6 @@ func TestE2ECallEachTool(t *testing.T) {
 		{"list_members", map[string]any{"channel": testutil.TestChannel}, "- " + testutil.OwnerName + "\n(1 member)"},
 		{"get_file", map[string]any{"file_id": testFileID},
 			"Saved " + filepath.Join(dir, "report.txt") + " (file id: " + testFileID + ")"},
-		{"follow_thread", map[string]any{"thread_root_id": root}, "Following thread " + root},
-		{"unfollow_thread", map[string]any{"thread_root_id": root},
-			"Left thread " + root + " — posting in it again re-follows it."},
 		{"create_post", map[string]any{"channel": testutil.TestChannel, "message": "hi"},
 			"Posted to mm-test (post id: " + postID("new") + ")"},
 		{"react", map[string]any{"post_id": post.Id, "emoji": "thumbsup", "action": "add"},

@@ -71,8 +71,6 @@ hosts use to decide what to prompt for.
 | `list_members`    | read-only                   | List a channel's members, or fuzzy-match usernames.                           |
 | `whoami`          | read-only                   | Your account, team, server and mm-mcp settings.                               |
 | `get_file`        | write (local disk)          | Download an attachment into `MM_MCP_DOWNLOAD_DIR`.                            |
-| `follow_thread`   | write                       | Follow a thread.                                                              |
-| `unfollow_thread` | write                       | Stop following a thread.                                                      |
 | `create_post`     | write                       | Post or reply, with attachments, now or scheduled.                            |
 | `react`           | write, destructive (remove) | Add or remove an emoji reaction.                                              |
 | `edit_post`       | write, destructive          | Edit or delete one of your own posts.                                         |

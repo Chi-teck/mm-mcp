@@ -27,8 +27,6 @@ func TestAnnotationTable(t *testing.T) {
 		{"search", true, false, false, true},
 		{"list_members", true, false, false, true},
 		{"get_file", false, false, false, true},
-		{"follow_thread", false, false, true, true},
-		{"unfollow_thread", false, false, true, true},
 		{"create_post", false, false, false, true},
 		{"react", false, true, true, true},
 		{"edit_post", false, true, false, true},

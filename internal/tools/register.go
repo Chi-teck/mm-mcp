@@ -23,20 +23,18 @@ type hints struct {
 
 // annotations is the table of tool annotations. addTool refuses any tool not listed here.
 var annotations = map[string]hints{
-	"list_channels":   {readOnly: true},
-	"read_posts":      {readOnly: true},
-	"get_post":        {readOnly: true},
-	"search":          {readOnly: true},
-	"list_members":    {readOnly: true},
-	"get_file":        {},
-	"follow_thread":   {idempotent: true},
-	"unfollow_thread": {idempotent: true},
-	"create_post":     {},
-	"react":           {destructive: true, idempotent: true},
-	"edit_post":       {destructive: true},
-	"dm":              {idempotent: true},
-	"api":             {destructive: true},
-	"whoami":          {readOnly: true, closedWorld: true},
+	"list_channels": {readOnly: true},
+	"read_posts":    {readOnly: true},
+	"get_post":      {readOnly: true},
+	"search":        {readOnly: true},
+	"list_members":  {readOnly: true},
+	"get_file":      {},
+	"create_post":   {},
+	"react":         {destructive: true, idempotent: true},
+	"edit_post":     {destructive: true},
+	"dm":            {idempotent: true},
+	"api":           {destructive: true},
+	"whoami":        {readOnly: true, closedWorld: true},
 }
 
 // toolAnnotations converts the table entry for name into MCP annotations;

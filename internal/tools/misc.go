@@ -13,10 +13,6 @@ import (
 	"github.com/Chi-teck/mm-mcp/internal/mattermost"
 )
 
-type threadIn struct {
-	ThreadRootID string `json:"thread_root_id" jsonschema:"Root post id of the thread"`
-}
-
 type reactIn struct {
 	PostID string `json:"post_id" jsonschema:"26-char post id"`
 	Emoji  string `json:"emoji" jsonschema:"Emoji name without colons, e.g. thumbsup"`
@@ -33,17 +29,8 @@ type dmIn struct {
 	Username string `json:"username" jsonschema:"Username, e.g. ivan.ch (a leading @ is ignored)"`
 }
 
-// registerMisc adds follow_thread, unfollow_thread, react, edit_post and dm.
+// registerMisc adds react, edit_post and dm.
 func registerMisc(s *mcp.Server, c *mattermost.Context) {
-	addTool(s, "follow_thread", "Follow a Mattermost thread, so you stay subscribed to its replies.",
-		func(ctx context.Context, in threadIn) (string, error) {
-			return followThread(ctx, c, in.ThreadRootID, true)
-		})
-	addTool(s, "unfollow_thread",
-		"Stop following a Mattermost thread — the way out of a conversation you were pulled into.",
-		func(ctx context.Context, in threadIn) (string, error) {
-			return followThread(ctx, c, in.ThreadRootID, false)
-		})
 	addTool(s, "react",
 		"Add or remove an emoji reaction on a Mattermost post (emoji name without colons, e.g. thumbsup).",
 		func(ctx context.Context, in reactIn) (string, error) { return react(ctx, c, in) },
@@ -64,35 +51,6 @@ func checkID(what, value string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid %s: %q (expected a 26-char id)", what, value)
-}
-
-// followThread follows (follow=true) or leaves the thread rooted at rootID. The server answers 200
-// for a reply or a root without replies but has no thread to change, so the root is checked first.
-func followThread(ctx context.Context, c *mattermost.Context, rootID string, follow bool) (string, error) {
-	if err := checkID("thread root id", rootID); err != nil {
-		return "", err
-	}
-	root, err := threadRoot(ctx, c, rootID)
-	if err != nil {
-		return "", err
-	}
-	if root.ReplyCount == 0 {
-		if follow {
-			return "", fmt.Errorf("post %s has no replies yet, so there is no thread to follow. "+
-				"Mattermost follows it automatically for its author and for anyone who replies", rootID)
-		}
-		return "Post " + rootID + " has no replies yet, so there is no thread to leave — nothing to do.", nil
-	}
-	me := c.Me()
-	team := c.Team()
-	path := fmt.Sprintf("/api/v4/users/%s/teams/%s/threads/%s/following", me.Id, team.Id, rootID)
-	if _, err := c.Client().UpdateThreadFollowForUser(ctx, me.Id, team.Id, rootID, follow); err != nil {
-		return "", mattermost.WrapErr(path, err)
-	}
-	if follow {
-		return "Following thread " + rootID, nil
-	}
-	return "Left thread " + rootID + " — posting in it again re-follows it.", nil
 }
 
 // react adds or removes the user's emoji reaction; a remove first checks the reaction exists,

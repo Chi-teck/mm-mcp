@@ -60,107 +60,6 @@ func serveFail(h *harness, method, pattern string, status int, message string) {
 	})
 }
 
-func followPath() string {
-	return testutil.APIPrefix + "/users/" + testutil.MeID + "/teams/" + testutil.TeamID +
-		"/threads/" + postID("root") + "/following"
-}
-
-// serveThreadRoot answers GET /posts/{id} with a root post that has replies.
-func serveThreadRoot(h *harness) {
-	serveRoot(h, &model.Post{Id: postID("root"), ChannelId: testutil.TestChannelID, ReplyCount: 2})
-}
-
-func TestFollowThread(t *testing.T) {
-	h := newHarness(t)
-	serveThreadRoot(h)
-	serveOK(h, http.MethodPut, "/users/{user_id}/teams/{team_id}/threads/{thread_id}/following")
-
-	got := h.callOK(t, "follow_thread", map[string]any{"thread_root_id": postID("root")})
-	if want := "Following thread " + postID("root"); got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-	wantCalls(t, h, "PUT "+followPath())
-}
-
-func TestUnfollowThread(t *testing.T) {
-	h := newHarness(t)
-	serveThreadRoot(h)
-	serveOK(h, http.MethodDelete, "/users/{user_id}/teams/{team_id}/threads/{thread_id}/following")
-
-	got := h.callOK(t, "unfollow_thread", map[string]any{"thread_root_id": postID("root")})
-	if want := "Left thread " + postID("root") + " — posting in it again re-follows it."; got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-	wantCalls(t, h, "DELETE "+followPath())
-}
-
-func TestFollowThreadErrors(t *testing.T) {
-	for _, tc := range []struct{ tool, method string }{
-		{"follow_thread", http.MethodPut},
-		{"unfollow_thread", http.MethodDelete},
-	} {
-		t.Run(tc.tool, func(t *testing.T) {
-			h := newHarness(t)
-			serveThreadRoot(h)
-			serveFail(h, tc.method, "/users/{user_id}/teams/{team_id}/threads/{thread_id}/following",
-				http.StatusNotFound, "no thread")
-			text, isErr := h.callTool(t, tc.tool, map[string]any{"thread_root_id": postID("root")})
-			wantErr(t, text, isErr, "mattermost API 404 "+followPath()+": no thread")
-
-			text, isErr = h.callTool(t, tc.tool, nil)
-			wantErr(t, text, isErr, `validating "arguments": validating root: required: missing properties: ["thread_root_id"]`)
-		})
-	}
-}
-
-// TestFollowThreadRootChecks covers the posts the server would accept with a 200 but not follow:
-// no request past GET /posts/{id} may be sent.
-func TestFollowThreadRootChecks(t *testing.T) {
-	id := postID("root")
-	notFound := func(h *harness) {
-		serveFail(h, http.MethodGet, "/posts/{post_id}", http.StatusNotFound, "Unable to get the post.")
-	}
-	reply := func(h *harness) {
-		serveRoot(h, &model.Post{Id: id, ChannelId: testutil.TestChannelID, RootId: postID("real"), ReplyCount: 3})
-	}
-	noReplies := func(h *harness) { serveRoot(h, &model.Post{Id: id, ChannelId: testutil.TestChannelID}) }
-	failed := func(h *harness) {
-		serveFail(h, http.MethodGet, "/posts/{post_id}", http.StatusForbidden, "denied")
-	}
-	notFoundText := "thread root " + id + " not found — it is deleted, or in a channel this user cannot read"
-	replyText := "post " + id + " is a reply, not a thread root — its thread root id is " + postID("real")
-	failedText := "mattermost API 403 " + testutil.APIPrefix + "/posts/" + id + ": denied"
-	tests := []struct {
-		name, tool string
-		serve      func(h *harness)
-		want       string
-		isErr      bool
-	}{
-		{"follow not found", "follow_thread", notFound, notFoundText, true},
-		{"unfollow not found", "unfollow_thread", notFound, notFoundText, true},
-		{"follow reply", "follow_thread", reply, replyText, true},
-		{"unfollow reply", "unfollow_thread", reply, replyText, true},
-		{"follow no replies", "follow_thread", noReplies, "post " + id + " has no replies yet, so there is no " +
-			"thread to follow. Mattermost follows it automatically for its author and for anyone who replies", true},
-		{"unfollow no replies", "unfollow_thread", noReplies,
-			"Post " + id + " has no replies yet, so there is no thread to leave — nothing to do.", false},
-		{"follow other error", "follow_thread", failed, failedText, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := newHarness(t)
-			serveOK(h, http.MethodPut, "/users/{user_id}/teams/{team_id}/threads/{thread_id}/following")
-			serveOK(h, http.MethodDelete, "/users/{user_id}/teams/{team_id}/threads/{thread_id}/following")
-			tt.serve(h)
-			text, isErr := h.callTool(t, tt.tool, map[string]any{"thread_root_id": id})
-			if text != tt.want || isErr != tt.isErr {
-				t.Fatalf("got %q (isError %v), want %q (isError %v)", text, isErr, tt.want, tt.isErr)
-			}
-			wantCalls(t, h)
-		})
-	}
-}
-
 func reactionsFor(h *harness, reactions ...*model.Reaction) {
 	h.fake.Handle(http.MethodGet, "/posts/{post_id}/reactions", func(w http.ResponseWriter, _ *http.Request) {
 		testutil.WriteJSON(w, http.StatusOK, reactions)
@@ -577,8 +476,6 @@ func TestMiscToolSchemas(t *testing.T) {
 		props    []string
 		enum     []any
 	}{
-		{"follow_thread", []string{"thread_root_id"}, []string{"thread_root_id"}, nil},
-		{"unfollow_thread", []string{"thread_root_id"}, []string{"thread_root_id"}, nil},
 		{"react", []string{"post_id", "emoji", "action"}, []string{"post_id", "emoji", "action"}, []any{"add", "remove"}},
 		{"edit_post", []string{"post_id", "action"}, []string{"post_id", "action", "message"}, []any{"edit", "delete"}},
 		{"dm", []string{"username"}, []string{"username"}, nil},
@@ -608,8 +505,6 @@ func TestInvalidIDsRefused(t *testing.T) {
 			`invalid post id: "." (expected a 26-char id)`},
 		{"edit_post", map[string]any{"post_id": "x/../../users/me", "action": "delete"},
 			`invalid post id: "x/../../users/me" (expected a 26-char id)`},
-		{"follow_thread", map[string]any{"thread_root_id": "."}, `invalid thread root id: "." (expected a 26-char id)`},
-		{"unfollow_thread", map[string]any{"thread_root_id": "a?b"}, `invalid thread root id: "a?b" (expected a 26-char id)`},
 		{"read_posts", map[string]any{"channel": testutil.TestChannel, "thread_root_id": "."},
 			`invalid thread root id: "." (expected a 26-char id)`},
 		{"create_post", map[string]any{"channel": "nope", "message": "x", "thread_root_id": "not-an-id", "attachments": []string{"a.txt"}},

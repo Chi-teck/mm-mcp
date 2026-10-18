@@ -137,30 +137,21 @@ func createPost(ctx context.Context, c *mattermost.Context, in createPostIn) (st
 // checkThreadRoot refuses a thread root the server would reject only after the uploads: one
 // that is missing, itself a reply, or in another channel than ch.
 func checkThreadRoot(ctx context.Context, c *mattermost.Context, id string, ch *model.Channel) error {
-	root, err := threadRoot(ctx, c, id)
+	root, _, err := c.Client().GetPost(ctx, id, "")
 	if err != nil {
+		err = mattermost.WrapErr("/api/v4/posts/"+id, err)
+		if mattermost.IsNotFound(err) {
+			return fmt.Errorf("thread root %s not found — it is deleted, or in a channel this user cannot read", id)
+		}
 		return err
+	}
+	if root.RootId != "" {
+		return fmt.Errorf("post %s is a reply, not a thread root — its thread root id is %s", id, root.RootId)
 	}
 	if root.ChannelId != ch.Id {
 		return fmt.Errorf("thread root %s is not in %s", id, c.ChannelLabel(ctx, ch))
 	}
 	return nil
-}
-
-// threadRoot reads the post id and refuses it when it is missing or itself a reply.
-func threadRoot(ctx context.Context, c *mattermost.Context, id string) (*model.Post, error) {
-	root, _, err := c.Client().GetPost(ctx, id, "")
-	if err != nil {
-		err = mattermost.WrapErr("/api/v4/posts/"+id, err)
-		if mattermost.IsNotFound(err) {
-			return nil, fmt.Errorf("thread root %s not found — it is deleted, or in a channel this user cannot read", id)
-		}
-		return nil, err
-	}
-	if root.RootId != "" {
-		return nil, fmt.Errorf("post %s is a reply, not a thread root — its thread root id is %s", id, root.RootId)
-	}
-	return root, nil
 }
 
 // confine resolves every attachment in order and requires its symlink-resolved path to sit
