@@ -41,7 +41,7 @@ type apiIn struct {
 
 // registerAPI adds the tools of this file.
 func registerAPI(s *mcp.Server, c *mattermost.Context) {
-	addTool(s, "api",
+	addTool(s, c, "api",
 		"Fallback for Mattermost REST endpoints that have no dedicated tool: send a raw request under "+
 			"/api/v4 and return the response body. Prefer a dedicated tool whenever one covers the task — "+
 			"those resolve channel names and format the output for reading.",

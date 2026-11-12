@@ -40,7 +40,7 @@ type createPostIn struct {
 
 // registerWrite adds create_post.
 func registerWrite(s *mcp.Server, c *mattermost.Context) {
-	addTool(s, "create_post",
+	addTool(s, c, "create_post",
 		"Post a message to a Mattermost channel, optionally as a thread reply (thread_root_id) with file "+
 			"attachments (local paths inside the upload root), now or scheduled for later (schedule_at). "+
 			"Scheduled posts are listed with the api tool (GET /posts/scheduled/team/{team_id}?includeDirectChannels=true) "+

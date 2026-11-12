@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Chi-teck/mm-mcp/internal/config"
 	"github.com/Chi-teck/mm-mcp/internal/mattermost"
 	"github.com/Chi-teck/mm-mcp/internal/testutil"
 )
@@ -83,23 +84,26 @@ func mustPanic(t *testing.T, want string, f func()) {
 
 func TestAddToolUnknownNamePanics(t *testing.T) {
 	mustPanic(t, `"no_such_tool" is not in the annotation table`, func() {
-		addTool(newServer(), "no_such_tool", "", func(context.Context, limitInput) (string, error) { return "", nil })
+		addTool(newServer(), nil, "no_such_tool", "", func(context.Context, limitInput) (string, error) { return "", nil })
 	})
 }
 
 func TestLimitRangeUnknownPropertyPanics(t *testing.T) {
 	mustPanic(t, `no property "limit"`, func() {
-		addTool(newServer(), "get_post", "", func(context.Context, getPostIn) (string, error) { return "", nil },
+		addTool(newServer(), nil, "get_post", "", func(context.Context, getPostIn) (string, error) { return "", nil },
 			limitRange)
 	})
 }
 
-// connect registers one tool through addTool and returns a connected client.
+// connect registers one tool through addTool, with a ready Context, and returns a connected client.
 func connect(t *testing.T, h handler[limitInput]) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
+	fake := testutil.New(t)
+	mm := mattermost.NewContext(config.Config{URL: fake.URL, Token: testutil.Token, Team: testutil.TeamName})
+	initContext(t, mm, fake)
 	server := newServer()
-	addTool(server, "read_posts", "Read posts.", h, limitRange)
+	addTool(server, mm, "read_posts", "Read posts.", h, limitRange)
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := server.Connect(ctx, st, nil)
 	if err != nil {

@@ -31,14 +31,14 @@ type dmIn struct {
 
 // registerMisc adds react, edit_post and dm.
 func registerMisc(s *mcp.Server, c *mattermost.Context) {
-	addTool(s, "react",
+	addTool(s, c, "react",
 		"Add or remove an emoji reaction on a Mattermost post (emoji name without colons, e.g. thumbsup).",
 		func(ctx context.Context, in reactIn) (string, error) { return react(ctx, c, in) },
 		enum("action", "add", "remove"))
-	addTool(s, "edit_post", "Edit or delete one of your own Mattermost posts.",
+	addTool(s, c, "edit_post", "Edit or delete one of your own Mattermost posts.",
 		func(ctx context.Context, in editPostIn) (string, error) { return editPost(ctx, c, in) },
 		enum("action", "edit", "delete"))
-	addTool(s, "dm",
+	addTool(s, c, "dm",
 		"Open (or reuse) a direct-message channel with a user by username (a leading @ is ignored) and return its channel name.",
 		func(ctx context.Context, in dmIn) (string, error) { return openDM(ctx, c, in.Username) })
 }

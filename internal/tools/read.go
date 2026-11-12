@@ -61,37 +61,38 @@ type getPostIn struct {
 
 // registerRead adds list_channels, read_posts, get_post, search, list_members and whoami.
 func registerRead(s *mcp.Server, c *mattermost.Context, version string) {
-	addTool(s, "list_channels",
+	addTool(s, c, "list_channels",
 		"List the Mattermost channels this user is a member of in the team, as `name — display_name [type]` "+
 			"(a DM shows `DM with @user` as its display name).",
 		func(ctx context.Context, _ listChannelsIn) (string, error) { return listChannels(ctx, c) })
-	addTool(s, "read_posts",
+	addTool(s, c, "read_posts",
 		"Read posts from a Mattermost channel. Branches: thread_root_id → a thread's root plus its newest replies; "+
 			"pinned → pinned posts; before → posts older than a post id; since → posts since a time "+
 			"(\"2h\", \"30m\", ISO date, epoch ms); otherwise latest posts (limit, default 30). "+
 			"Bodies are cut at 500 chars unless full=true.",
 		func(ctx context.Context, in readPostsIn) (string, error) { return readPosts(ctx, c, in) },
 		limitRange, defaultTo("limit", defaultLimit))
-	addTool(s, "get_post",
+	addTool(s, c, "get_post",
 		"Read one Mattermost post by id — its channel, author, body, reactions and attachments. Use it to check "+
 			"a single post instead of reading the channel and filtering.",
 		func(ctx context.Context, in getPostIn) (string, error) { return getPost(ctx, c, in) })
-	addTool(s, "search",
+	addTool(s, c, "search",
 		`Search Mattermost posts or files across the team by keyword (type: "posts" or "files").`,
 		func(ctx context.Context, in searchIn) (string, error) { return search(ctx, c, in) },
 		enum("type", "posts", "files"))
-	addTool(s, "list_members",
+	addTool(s, c, "list_members",
 		"List members of a Mattermost channel; with query, fuzzy-match usernames (out-of-channel matches are marked).",
 		func(ctx context.Context, in listMembersIn) (string, error) { return listMembers(ctx, c, in) })
-	addTool(s, "whoami",
-		"Describe this session as of mm-mcp startup: your Mattermost account (username, id, bot or not, "+
-			"system roles, locale, profile timezone), the team that channel names refer to, the server URL and "+
-			"version, the zone mm-mcp reads offset-less times in, and mm-mcp's download directory and upload root. "+
-			"Instant; no side effects.",
+	addTool(s, c, "whoami",
+		"Describe this session as loaded when mm-mcp first reached Mattermost: your Mattermost account "+
+			"(username, id, bot or not, system roles, locale, profile timezone), the team that channel names refer "+
+			"to, the server URL and version, the zone mm-mcp reads offset-less times in, and mm-mcp's download "+
+			"directory and upload root. Instant once mm-mcp has reached Mattermost; no side effects.",
 		func(context.Context, whoamiIn) (string, error) { return whoami(c, version), nil })
 }
 
-// whoami describes the session from the data loaded at startup; it sends no request.
+// whoami describes the session from the data loaded by the first successful
+// check; it sends no request itself.
 func whoami(c *mattermost.Context, version string) string {
 	me, team := c.Me(), c.Team()
 	name := oneLine(me.FirstName + " " + me.LastName)

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -124,18 +125,88 @@ func TestRunUnknownTeam(t *testing.T) {
 	}
 }
 
-func TestRunInitTimeout(t *testing.T) {
+// TestRunServesWhenMattermostSlow: a Mattermost that hangs at startup does not
+// stop initialize from being answered; tool calls report why Mattermost fails
+// until it answers, and then work without a restart.
+func TestRunServesWhenMattermostSlow(t *testing.T) {
 	old := initTimeout
 	initTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { initTimeout = old })
 
 	fake := testutil.New(t)
-	fake.Handle(http.MethodGet, "/users/{user_id}", func(_ http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+	var calls atomic.Int32
+	fake.Handle(http.MethodGet, "/users/me", func(w http.ResponseWriter, r *http.Request) {
+		switch calls.Add(1) {
+		case 1:
+			<-r.Context().Done()
+		case 2:
+			testutil.WriteError(w, http.StatusServiceUnavailable, "x", "maintenance")
+		default:
+			testutil.WriteJSON(w, http.StatusOK, fake.Me)
+		}
 	})
-	line := runFail(t, env(fakeEnv(fake)))
-	if want := "mm-mcp: no answer from Mattermost within 50ms"; line != want {
-		t.Errorf("stderr = %q, want %q", line, want)
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	var stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- run(context.Background(), nil, env(fakeEnv(fake)), inR, outW, &stderr)
+		_ = outW.Close()
+	}()
+	out := bufio.NewReader(outR)
+	send := func(req string) []byte {
+		t.Helper()
+		if _, err := io.WriteString(inW, req+"\n"); err != nil {
+			t.Fatal(err)
+		}
+		line, err := out.ReadBytes('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		return line
+	}
+
+	line := send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`)
+	if !bytes.Contains(line, []byte(`"serverInfo"`)) {
+		t.Fatalf("stdout = %q, want an initialize response", line)
+	}
+	if _, err := io.WriteString(inW, `{"jsonrpc":"2.0","method":"notifications/initialized"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	whoami := func(id string) (text string, isError bool) {
+		t.Helper()
+		line := send(`{"jsonrpc":"2.0","id":` + id + `,"method":"tools/call","params":{"name":"whoami","arguments":{}}}`)
+		var resp struct {
+			Result struct {
+				Content []struct{ Text string } `json:"content"`
+				IsError bool                    `json:"isError"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(line, &resp); err != nil || len(resp.Result.Content) != 1 {
+			t.Fatalf("stdout = %q, want a tool result (%v)", line, err)
+		}
+		return resp.Result.Content[0].Text, resp.Result.IsError
+	}
+	if text, isErr := whoami("2"); !isErr || text != "mattermost API 503 /api/v4/users/me: maintenance" {
+		t.Errorf("1st whoami: isError=%v text=%q, want the 503", isErr, text)
+	}
+	if text, isErr := whoami("3"); isErr || !strings.Contains(text, "You: @"+fake.Me.Username) {
+		t.Errorf("2nd whoami: isError=%v text=%q, want the session", isErr, text)
+	}
+
+	_ = inW.Close()
+	go func() { _, _ = io.Copy(io.Discard, out) }()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after stdin closed")
+	}
+	want := "mm-mcp: Mattermost not reachable yet, serving anyway: no answer from Mattermost within 50ms\n"
+	if !strings.HasPrefix(stderr.String(), want) {
+		t.Errorf("stderr = %q, want it to start with %q", stderr.String(), want)
 	}
 }
 
@@ -214,11 +285,28 @@ func TestRunServesStdio(t *testing.T) {
 func TestRunMultiLineServerMessage(t *testing.T) {
 	fake := testutil.New(t)
 	fake.Handle(http.MethodGet, "/users/{user_id}", func(w http.ResponseWriter, _ *http.Request) {
-		testutil.WriteError(w, http.StatusInternalServerError, "x", "first line\n  second line")
+		testutil.WriteError(w, http.StatusForbidden, "x", "first line\n  second line")
 	})
 	line := runFail(t, env(fakeEnv(fake)))
 	if !strings.HasSuffix(line, ": first line second line") {
 		t.Errorf("stderr = %q, want the server message on one line", line)
+	}
+}
+
+func TestRunMultiLineServerMessageWarning(t *testing.T) {
+	fake := testutil.New(t)
+	fake.Handle(http.MethodGet, "/users/{user_id}", func(w http.ResponseWriter, _ *http.Request) {
+		testutil.WriteError(w, http.StatusInternalServerError, "x", "first line\n  second line")
+	})
+	var stdout, stderr bytes.Buffer
+	// Empty stdin: the client disconnects at once.
+	if code := run(context.Background(), nil, env(fakeEnv(fake)), strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Errorf("exit code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	line, _, _ := strings.Cut(stderr.String(), "\n")
+	if !strings.HasPrefix(line, "mm-mcp: Mattermost not reachable yet, serving anyway: ") ||
+		!strings.HasSuffix(line, ": first line second line") {
+		t.Errorf("stderr = %q, want the warning with the server message on one line", stderr.String())
 	}
 }
 

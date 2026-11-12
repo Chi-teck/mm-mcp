@@ -45,7 +45,7 @@ func registerFiles(s *mcp.Server, c *mattermost.Context) {
 	if where == "" {
 		where = "the " + config.EnvDownloadDir + " directory (currently unset, so every call fails)"
 	}
-	addTool(s, "get_file",
+	addTool(s, c, "get_file",
 		"Download a Mattermost file attachment by id into "+where+" and return the saved path.",
 		func(ctx context.Context, in getFileIn) (string, error) { return getFile(ctx, c, in) })
 }

@@ -20,8 +20,10 @@ import (
 	"github.com/Chi-teck/mm-mcp/internal/tools"
 )
 
-// initTimeout bounds the startup checks (GET /users/me and the team lookup).
-var initTimeout = 10 * time.Second
+// initTimeout bounds the startup check (GET /users/me and the team lookup). It
+// stays below the 10 s that clients such as Pi wait for a server to start, so
+// initialize is always answered in time.
+var initTimeout = 5 * time.Second
 
 // stopGrace bounds how long run may take to return after SIGINT/SIGTERM.
 // Tool handlers do not see the canceled context (go-sdk detaches them) and
@@ -45,17 +47,21 @@ func main() {
 // run answers --version (on stdout, exit 0, no environment needed); otherwise
 // it validates the configuration, checks the token and team within
 // initTimeout, and then serves MCP on stdin/stdout until the client
-// disconnects or ctx is canceled. Any failure is printed as one line on
-// stderr and yields exit status 1. Nothing but MCP frames goes to stdout.
+// disconnects or ctx is canceled. If Mattermost is unavailable at startup
+// (see mattermost.Unavailable), it prints a warning and serves anyway: each
+// tool call retries the check until it succeeds. Any other failure is printed
+// as one line on stderr and yields exit status 1. Nothing but MCP frames goes
+// to stdout.
 func run(ctx context.Context, args []string, lookup func(string) (string, bool), stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "--version" {
 		_, _ = fmt.Fprintln(stdout, "mm-mcp "+buildVersion())
 		return 0
 	}
 
+	// One line even if a server message spans several.
+	oneLine := func(err error) string { return strings.Join(strings.Fields(err.Error()), " ") }
 	fail := func(err error) int {
-		// One line even if a server message spans several.
-		_, _ = fmt.Fprintln(stderr, "mm-mcp: "+strings.Join(strings.Fields(err.Error()), " "))
+		_, _ = fmt.Fprintln(stderr, "mm-mcp: "+oneLine(err))
 		return 1
 	}
 
@@ -65,15 +71,11 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	}
 
 	mm := mattermost.NewContext(cfg)
-	initCtx, cancel := context.WithTimeout(ctx, initTimeout)
-	err = mm.Init(initCtx)
-	timedOut := errors.Is(initCtx.Err(), context.DeadlineExceeded)
-	cancel()
-	if err != nil && timedOut {
-		err = fmt.Errorf("no answer from Mattermost within %s", initTimeout)
-	}
-	if err != nil {
-		return fail(err)
+	if err := mm.Ready(ctx, initTimeout); err != nil {
+		if ctx.Err() != nil || !mattermost.Unavailable(err) {
+			return fail(err)
+		}
+		_, _ = fmt.Fprintln(stderr, "mm-mcp: Mattermost not reachable yet, serving anyway: "+oneLine(err))
 	}
 
 	if cfg.UploadRoot != "" {

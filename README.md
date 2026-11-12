@@ -30,9 +30,13 @@ Environment variables only, passed in by the MCP host.
 | `MM_MCP_UPLOAD_ROOT`  | no       | `create_post` attachments must resolve inside it. Default: the working directory; attachments are disabled if that is `/` or `$HOME`. |
 
 Relative paths resolve against the server's working directory. At startup the
-server validates the variables, checks the token and resolves the team (10 s
-timeout); on failure it prints every problem to stderr in one line and exits 1.
-stdout carries MCP frames only.
+server validates the variables, checks the token and resolves the team. Invalid
+variables, a rejected token, an unknown team or a TLS certificate that fails
+verification make it print every problem to stderr in one line and exit 1. If
+Mattermost cannot be reached, does not answer within 5 s or reports a temporary
+error (HTTP 408, 429 or 5xx), the server starts anyway, and each tool call
+retries the check until it succeeds, reporting the reason meanwhile. stdout
+carries MCP frames only.
 
 GUI hosts such as Claude Desktop usually start servers in `/` or `$HOME`, so set
 `MM_MCP_UPLOAD_ROOT` explicitly there if you need attachments.

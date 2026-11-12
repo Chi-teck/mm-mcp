@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -88,6 +89,10 @@ func defaultTo(prop string, v any) schemaEdit {
 	}
 }
 
+// readyTimeout bounds the check a tool call makes while mm-mcp has not yet
+// reached Mattermost (see mattermost.Context.Ready).
+const readyTimeout = 10 * time.Second
+
 // panicLog receives the panic value and stack of a crashed handler.
 var panicLog io.Writer = os.Stderr
 
@@ -95,8 +100,9 @@ var panicLog io.Writer = os.Stderr
 // (`json` tags name the properties, jsonschema tags describe them, omitempty
 // marks them optional) and then adjusted by edits. It panics if name is not
 // in the annotation table or the schema cannot be built, so the table and the
-// code cannot drift.
-func addTool[In any](s *mcp.Server, name, description string, h handler[In], edits ...schemaEdit) {
+// code cannot drift. A call with valid input runs h only once c.Ready
+// succeeds, and otherwise returns Ready's error.
+func addTool[In any](s *mcp.Server, c *mattermost.Context, name, description string, h handler[In], edits ...schemaEdit) {
 	annotations := toolAnnotations(name)
 	schema, err := jsonschema.For[In](nil)
 	if err != nil {
@@ -120,6 +126,9 @@ func addTool[In any](s *mcp.Server, name, description string, h handler[In], edi
 				res = errorResult(fmt.Errorf("internal error in %s; details are in the server log", name))
 			}
 		}()
+		if err := c.Ready(ctx, readyTimeout); err != nil {
+			return errorResult(err), nil, nil
+		}
 		text, err := h(ctx, in)
 		if err != nil {
 			return errorResult(err), nil, nil

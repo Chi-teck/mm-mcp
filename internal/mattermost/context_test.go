@@ -2,12 +2,18 @@ package mattermost
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -176,6 +182,161 @@ func TestInitNullResponse(t *testing.T) {
 				t.Fatalf("got %v; want the empty-response error", err)
 			}
 		})
+	}
+}
+
+// TestReadyRetries: a failed check is retried by the next Ready; once one has
+// succeeded, Ready sends no request.
+func TestReadyRetries(t *testing.T) {
+	c, fake := newTestContext(t)
+	c.me, c.team = nil, nil
+	var calls atomic.Int32
+	fake.Handle(http.MethodGet, "/users/me", func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			testutil.WriteError(w, http.StatusServiceUnavailable, "x", "maintenance")
+			return
+		}
+		testutil.WriteJSON(w, http.StatusOK, fake.Me)
+	})
+	err := c.Ready(t.Context(), time.Second)
+	if want := "mattermost API 503 /api/v4/users/me: maintenance"; err == nil || err.Error() != want {
+		t.Fatalf("1st Ready = %v, want %q", err, want)
+	}
+	if err := c.Ready(t.Context(), time.Second); err != nil {
+		t.Fatalf("2nd Ready = %v, want success", err)
+	}
+	if c.Me().Id != testutil.MeID || c.Team().Id != testutil.TeamID {
+		t.Fatalf("me=%v team=%v", c.Me(), c.Team())
+	}
+	n := len(fake.Requests())
+	if err := c.Ready(t.Context(), time.Second); err != nil || len(fake.Requests()) != n {
+		t.Fatalf("3rd Ready = %v with %d requests, want success with none", err, len(fake.Requests())-n)
+	}
+}
+
+// TestReadyTimeout: a check that runs out of time, before the headers or
+// mid-body, reads as such and counts as Mattermost being unavailable.
+func TestReadyTimeout(t *testing.T) {
+	for name, hang := range map[string]http.HandlerFunc{
+		"headers": func(_ http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		},
+		"body": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":`))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, fake := newTestContext(t)
+			c.me, c.team = nil, nil
+			fake.Handle(http.MethodGet, "/users/me", hang)
+			err := c.Ready(t.Context(), 50*time.Millisecond)
+			if want := "no answer from Mattermost within 50ms"; err == nil || err.Error() != want {
+				t.Fatalf("got %v, want %q", err, want)
+			}
+			if !Unavailable(err) {
+				t.Errorf("Unavailable(%v) = false, want true", err)
+			}
+		})
+	}
+}
+
+// TestReadySharesCheck: a Ready made while another one's check runs shares
+// that check; a call whose ctx ends returns at once and does not end the check.
+func TestReadySharesCheck(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := NewContext(config.Config{URL: "http://mm.test", Token: testutil.Token, Team: testutil.TeamName})
+		var requests atomic.Int32
+		release := make(chan struct{})
+		c.client.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			requests.Add(1)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return nil, r.Context().Err()
+			}
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Header:     http.Header{"Content-Type": {"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"message":"maintenance","status_code":503}`)),
+				Request:    r,
+			}, nil
+		})}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		first, second := make(chan error, 1), make(chan error, 1)
+		go func() { first <- c.Ready(ctx, 5*time.Second) }()
+		synctest.Wait() // the check waits for release
+		go func() { second <- c.Ready(t.Context(), 5*time.Second) }()
+		synctest.Wait() // the second call waits for the same check
+		cancel()
+		if err := <-first; !errors.Is(err, context.Canceled) {
+			t.Errorf("canceled Ready = %v, want context.Canceled", err)
+		}
+		close(release)
+		if err, want := <-second, "mattermost API 503 /api/v4/users/me: maintenance"; err == nil || err.Error() != want {
+			t.Errorf("waiting Ready = %v, want %q", err, want)
+		}
+		if n := requests.Load(); n != 1 {
+			t.Errorf("requests = %d, want 1", n)
+		}
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestReadyUnavailable checks Unavailable on what Ready returns for answers
+// that are not Mattermost's own.
+func TestReadyUnavailable(t *testing.T) {
+	t.Run("proxy page", func(t *testing.T) {
+		c, fake := newTestContext(t)
+		c.me, c.team = nil, nil
+		fake.Handle(http.MethodGet, "/users/me", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("<html><body>502 Bad Gateway</body></html>"))
+		})
+		if err := c.Ready(t.Context(), time.Second); !Unavailable(err) {
+			t.Errorf("Unavailable(%v) = false, want true", err)
+		}
+	})
+	t.Run("untrusted certificate", func(t *testing.T) {
+		srv := httptest.NewTLSServer(http.NotFoundHandler())
+		t.Cleanup(srv.Close)
+		c := NewContext(config.Config{URL: srv.URL, Token: testutil.Token, Team: testutil.TeamName})
+		if err := c.Ready(t.Context(), time.Second); err == nil || Unavailable(err) {
+			t.Errorf("Unavailable(%v) = true, want false", err)
+		}
+	})
+}
+
+func TestUnavailable(t *testing.T) {
+	api := func(status int) error { return &APIError{Status: status, Path: "/api/v4/users/me"} }
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{api(http.StatusUnauthorized), false},
+		{api(http.StatusForbidden), false},
+		{api(http.StatusNotFound), false},
+		{errors.New("mattermost team not found: nope"), false},
+		{CheckName("team", "mm..test"), false},
+		{errEmptyResponse, false},
+		{api(http.StatusRequestTimeout), true},
+		{api(http.StatusTooManyRequests), true},
+		{api(http.StatusInternalServerError), true},
+		{api(http.StatusServiceUnavailable), true},
+		{&url.Error{Op: "Get", URL: "https://mm.example/api/v4/users/me", Err: errors.New("connection refused")}, true},
+		{fmt.Errorf("failed to decode JSON response: %w", context.DeadlineExceeded), true},
+	} {
+		if got := Unavailable(tc.err); got != tc.want {
+			t.Errorf("Unavailable(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }
 

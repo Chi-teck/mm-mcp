@@ -3,6 +3,7 @@ package mattermost
 import (
 	"cmp"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -12,9 +13,11 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Chi-teck/mm-mcp/internal/config"
 )
@@ -36,6 +39,9 @@ type Context struct {
 	team          *model.Team // set once by Init
 	serverVersion string      // set once by Init; "" when unknown
 
+	ready atomic.Bool        // set by Init once me, team and serverVersion hold its results
+	check singleflight.Group // shares Ready's check among concurrent calls
+
 	mu       sync.Mutex
 	channels map[string]cached[*model.Channel] // keys "id:<id>" and "name:<team id>:<name>" ("" team for DM/GM)
 	users    map[string]cached[string]         // user id → username
@@ -47,8 +53,8 @@ type cached[T any] struct {
 	expires time.Time
 }
 
-// NewContext builds a Context from cfg. It does no network I/O; call Init
-// at startup to fetch the current user and team.
+// NewContext builds a Context from cfg. It does no network I/O; Ready fetches
+// the current user and team.
 func NewContext(cfg config.Config) *Context {
 	return &Context{
 		cfg:      cfg,
@@ -75,9 +81,10 @@ func (c *Context) DownloadDir() string { return c.cfg.DownloadDir }
 func (c *Context) UploadRoot() string { return c.cfg.UploadRoot }
 
 // Init fetches the current user and the configured team, so that a bad token
-// or team name fails at startup. It must succeed before any tool runs; the
-// results are kept for the process lifetime. The caller bounds ctx.
-// A team containing ".." is refused before any request (see CheckName).
+// or team name is reported. The caller bounds ctx. A team containing ".." is
+// refused before any request (see CheckName). On success it marks the Context
+// ready (see Ready). Init takes no lock: call it directly only before serving;
+// tools go through Ready.
 func (c *Context) Init(ctx context.Context) error {
 	if err := CheckName("team", c.cfg.Team); err != nil {
 		return err
@@ -100,7 +107,72 @@ func (c *Context) Init(ctx context.Context) error {
 	if resp != nil {
 		c.serverVersion = trimVersion(resp.ServerVersion)
 	}
+	c.ready.Store(true)
 	return nil
+}
+
+// Ready runs Init, bounded by timeout, until it succeeds once; from then on it
+// returns nil without a request, and Me, Team and ServerVersion hold its
+// results for the process lifetime. Calls made while a check runs share it
+// instead of starting their own. The check does not end with ctx: a call whose
+// ctx ends returns ctx's error at once and leaves the check to the others. On a
+// deadline the error reads `no answer from Mattermost within <timeout>` and
+// wraps Init's error.
+func (c *Context) Ready(ctx context.Context, timeout time.Duration) error {
+	if c.ready.Load() {
+		return nil
+	}
+	ch := c.check.DoChan("", func() (any, error) {
+		if c.ready.Load() {
+			return nil, nil // the previous check succeeded after this call looked
+		}
+		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
+		err := c.Init(checkCtx)
+		// checkCtx has no other deadline, and a reply that lands at the deadline keeps its own error.
+		if errors.Is(err, context.DeadlineExceeded) {
+			err = &timeoutError{timeout: timeout, err: err}
+		}
+		return nil, err
+	})
+	select {
+	case res := <-ch:
+		return res.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// timeoutError is a check by Ready that ran out of time; it wraps Init's error.
+type timeoutError struct {
+	timeout time.Duration
+	err     error
+}
+
+func (e *timeoutError) Error() string {
+	return fmt.Sprintf("no answer from Mattermost within %s", e.timeout)
+}
+
+func (e *timeoutError) Unwrap() error { return e.err }
+
+// Unavailable reports whether err from Ready means that Mattermost could not
+// answer for now rather than that it rejected the configuration: a network or
+// DNS error, a timeout, or HTTP 408, 429 or 5xx. A TLS certificate that fails
+// verification counts as a configuration error, since waiting will not fix it.
+func Unavailable(err error) bool {
+	if _, ok := errors.AsType[*tls.CertificateVerificationError](err); ok {
+		return false
+	}
+	if _, ok := errors.AsType[*url.Error](err); ok {
+		return true
+	}
+	// A timeout while Client4 decodes a 2xx body is not a *url.Error.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	apiErr, ok := errors.AsType[*APIError](err)
+	return ok && (apiErr.Status == http.StatusRequestTimeout || apiErr.Status == http.StatusTooManyRequests ||
+		apiErr.Status >= http.StatusInternalServerError)
 }
 
 // trimVersion keeps the `X.Y.Z` version from an X-Version-Id header
@@ -119,14 +191,17 @@ func trimVersion(id string) string {
 	return strings.Join(parts[:3], ".")
 }
 
-// Me returns the current user loaded by Init.
+// Me returns the current user loaded by the first successful Ready; tools may
+// call it only after Ready.
 func (c *Context) Me() *model.User { return c.me }
 
-// Team returns the configured team loaded by Init.
+// Team returns the configured team loaded by the first successful Ready; tools
+// may call it only after Ready.
 func (c *Context) Team() *model.Team { return c.team }
 
-// ServerVersion returns the Mattermost version (`X.Y.Z`) seen by Init, or ""
-// when the server did not report a recognizable one.
+// ServerVersion returns the Mattermost version (`X.Y.Z`) seen by the first
+// successful Ready, or "" when the server did not report a recognizable one.
+// Tools may call it only after Ready.
 func (c *Context) ServerVersion() string { return c.serverVersion }
 
 // fetchTeam looks up the configured team by id when the configured value has
